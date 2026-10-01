@@ -4,11 +4,29 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/jpsdm/dev/internal/filesystem"
+	"github.com/jpsdm/dev/internal/runtime/node"
 )
+
+// pathEntriesFromEnvOutput parses `dev env`'s PATH line back into its
+// individual entries, in the syntax of whichever shell shell.Detect()
+// picked for the OS the test is actually running on (POSIX
+// export PATH='a:b' here, PowerShell $env:PATH = "a;b" on Windows —
+// see shell.ExportLines).
+func pathEntriesFromEnvOutput(t *testing.T, out string) []string {
+	t.Helper()
+	line := strings.TrimSpace(strings.Split(out, "\n")[1])
+	if runtime.GOOS == "windows" {
+		value := strings.TrimSuffix(strings.TrimPrefix(line, `$env:PATH = "`), `"`)
+		return strings.Split(value, ";")
+	}
+	value := strings.Trim(strings.TrimPrefix(line, "export PATH="), "'")
+	return strings.Split(value, ":")
+}
 
 func TestEnvCmd_NoActiveVersionsPrintsBareDevHome(t *testing.T) {
 	devHome := t.TempDir()
@@ -25,11 +43,16 @@ func TestEnvCmd_NoActiveVersionsPrintsBareDevHome(t *testing.T) {
 	if !strings.Contains(out, devHome) {
 		t.Fatalf("expected output to contain devHome %q, got %q", devHome, out)
 	}
-	// The PATH value is single-quoted, not double-quoted: these lines
-	// are eval'd by the installed shell function, and POSIX double
-	// quotes don't suppress command substitution. See
-	// shell.posixExportLines.
-	if !strings.Contains(out, "/usr/bin:/bin") || !strings.HasSuffix(strings.TrimSpace(out), `/usr/bin:/bin'`) {
+	// The PATH value's closing quote differs by shell: POSIX
+	// single-quotes it (these lines are eval'd by the installed shell
+	// function, and POSIX double quotes don't suppress command
+	// substitution — see shell.posixExportLines), PowerShell
+	// double-quotes it (see shell.ExportLines).
+	wantSuffix := "/usr/bin:/bin'"
+	if runtime.GOOS == "windows" {
+		wantSuffix = `/usr/bin:/bin"`
+	}
+	if !strings.Contains(out, "/usr/bin:/bin") || !strings.HasSuffix(strings.TrimSpace(out), wantSuffix) {
 		t.Fatalf("expected the inherited PATH entries preserved at the end, got %q", out)
 	}
 }
@@ -54,7 +77,13 @@ func TestEnvCmd_IncludesActiveVersionBinDir(t *testing.T) {
 		t.Fatalf("RunE: %v", err)
 	}
 
-	wantBinDir := filepath.Join(versionDir, "bin")
+	// Node's bin layout is platform-specific (node.exe sits directly in
+	// versionDir on Windows, not under a "bin" subdirectory like the
+	// Unix tarball layout) — see node.binDirForOS.
+	wantBinDir, err := node.New().BinDir(versionDir)
+	if err != nil {
+		t.Fatalf("node.BinDir: %v", err)
+	}
 	if !strings.Contains(buf.String(), wantBinDir) {
 		t.Fatalf("expected output to contain %q, got %q", wantBinDir, buf.String())
 	}
@@ -87,7 +116,7 @@ func TestEnvCmd_SkipsAMarkerWhoseContentEscapesTheVersionsDirectory(t *testing.T
 	// devHome/versions/, or an entry inherited from the original PATH —
 	// never a path the traversal payload resolved to outside devHome.
 	versionsDir := filepath.Join(devHome, "versions")
-	for _, entry := range strings.Split(strings.Trim(strings.TrimPrefix(strings.TrimSpace(strings.Split(out, "\n")[1]), "export PATH="), "'"), ":") {
+	for _, entry := range pathEntriesFromEnvOutput(t, out) {
 		switch {
 		case entry == devHome, entry == "/usr/bin":
 			continue
