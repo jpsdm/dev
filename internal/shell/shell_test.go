@@ -225,22 +225,34 @@ func TestParentShellName_UnrecognizedProcessReturnsFalse(t *testing.T) {
 	}
 }
 
+// testDevHome returns an OS-native absolute devHome path ("/home/u/.dev"
+// on Unix, `\home\u\.dev` on Windows) — ComputePathEntries builds its
+// stale-versions prefix with filepath.Join/Separator, so a literal
+// forward-slash string here would silently never match it on Windows.
+func testDevHome() string {
+	return filepath.Join(string(filepath.Separator), "home", "u", ".dev")
+}
+
 func TestComputePathEntries_PrependsDevHomeAndActiveDirs(t *testing.T) {
+	devHome := testDevHome()
+	activeDir := filepath.Join(devHome, "versions", "node", "22", "bin")
 	current := []string{"/usr/bin", "/bin"}
-	got := ComputePathEntries(current, "/home/u/.dev", []string{"/home/u/.dev/versions/node/22/bin"})
-	want := []string{"/home/u/.dev", "/home/u/.dev/versions/node/22/bin", "/usr/bin", "/bin"}
+	got := ComputePathEntries(current, devHome, []string{activeDir})
+	want := []string{devHome, activeDir, "/usr/bin", "/bin"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %v, want %v", got, want)
 	}
 }
 
 func TestComputePathEntries_StripsStaleVersionsEntries(t *testing.T) {
+	devHome := testDevHome()
+	activeDir := filepath.Join(devHome, "versions", "node", "22", "bin")
 	current := []string{
-		"/home/u/.dev/versions/node/20/bin", // stale: a prior active Node version
+		filepath.Join(devHome, "versions", "node", "20", "bin"), // stale: a prior active Node version
 		"/usr/bin",
 	}
-	got := ComputePathEntries(current, "/home/u/.dev", []string{"/home/u/.dev/versions/node/22/bin"})
-	want := []string{"/home/u/.dev", "/home/u/.dev/versions/node/22/bin", "/usr/bin"}
+	got := ComputePathEntries(current, devHome, []string{activeDir})
+	want := []string{devHome, activeDir, "/usr/bin"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %v, want %v", got, want)
 	}
@@ -249,9 +261,10 @@ func TestComputePathEntries_StripsStaleVersionsEntries(t *testing.T) {
 func TestComputePathEntries_StripsDevHomeItself(t *testing.T) {
 	// devHome is always re-prepended fresh; a stale literal devHome entry
 	// already present in current must not be duplicated.
-	current := []string{"/home/u/.dev", "/usr/bin"}
-	got := ComputePathEntries(current, "/home/u/.dev", nil)
-	want := []string{"/home/u/.dev", "/usr/bin"}
+	devHome := testDevHome()
+	current := []string{devHome, "/usr/bin"}
+	got := ComputePathEntries(current, devHome, nil)
+	want := []string{devHome, "/usr/bin"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %v, want %v", got, want)
 	}
@@ -261,24 +274,26 @@ func TestComputePathEntries_SkipsEmptyEntries(t *testing.T) {
 	// strings.Split("", sep) yields [""], not []; an empty PATH segment
 	// means "current directory" to a POSIX shell and must never be
 	// introduced by this computation.
-	got := ComputePathEntries([]string{""}, "/home/u/.dev", nil)
-	want := []string{"/home/u/.dev"}
+	devHome := testDevHome()
+	got := ComputePathEntries([]string{""}, devHome, nil)
+	want := []string{devHome}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %v, want %v", got, want)
 	}
 }
 
 func TestComputePathEntries_NoActiveProvidersContributesNothing(t *testing.T) {
-	got := ComputePathEntries([]string{"/usr/bin"}, "/home/u/.dev", nil)
-	want := []string{"/home/u/.dev", "/usr/bin"}
+	devHome := testDevHome()
+	got := ComputePathEntries([]string{"/usr/bin"}, devHome, nil)
+	want := []string{devHome, "/usr/bin"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %v, want %v", got, want)
 	}
 }
 
 func TestComputePathEntries_IdempotentAcrossRepeatedCalls(t *testing.T) {
-	devHome := "/home/u/.dev"
-	active := []string{"/home/u/.dev/versions/node/22/bin"}
+	devHome := testDevHome()
+	active := []string{filepath.Join(devHome, "versions", "node", "22", "bin")}
 	first := ComputePathEntries([]string{"/usr/bin", "/bin"}, devHome, active)
 	second := ComputePathEntries(first, devHome, active)
 	if !reflect.DeepEqual(first, second) {
