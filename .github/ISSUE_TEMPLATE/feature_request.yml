@@ -1,0 +1,37 @@
+name: Feature request
+description: Suggest an idea or enhancement for dev
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Proposing support for a new language or runtime (Python, Rust,
+        ...)? Use the **New language provider** template instead — it
+        asks for the research a reviewer actually needs.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: What are you trying to do that dev doesn't support today?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What would you like dev to do instead?
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Any other approaches you thought about, and why you didn't prefer them.
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context

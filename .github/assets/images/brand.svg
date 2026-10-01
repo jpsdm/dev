@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 200" width="400" height="200">
+  <!-- Background do Terminal -->
+  <rect width="400" height="200" rx="20" fill="#1A1B26" />
+  
+  <!-- Botões da Janela do macOS -->
+  <circle cx="40" cy="40" r="8" fill="#F7768E" />
+  <circle cx="70" cy="40" r="8" fill="#E0AF68" />
+  <circle cx="100" cy="40" r="8" fill="#9ECE6A" />
+  
+  <!-- Símbolo de Prompt (com a cor Azul do Go) -->
+  <text x="50" y="130" font-family="monospace" font-size="80" font-weight="bold" fill="#00ADD8">&gt;_</text>
+  
+  <!-- Texto "dev" -->
+  <text x="170" y="130" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="85" font-weight="800" fill="#FFFFFF" letter-spacing="-2">dev</text>
+  
+  <!-- Subtítulo -->
+  <text x="55" y="170" font-family="monospace" font-size="14" font-weight="normal" fill="#A9B1D6">workspace &amp; runtime manager</text>
+</svg>

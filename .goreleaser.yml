@@ -1,0 +1,45 @@
+version: 2
+
+project_name: dev
+
+builds:
+  - id: dev
+    main: .
+    binary: dev
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X github.com/jpsdm/dev/cmd.Version={{.Tag}}
+      - -X github.com/jpsdm/dev/cmd.Commit={{.Commit}}
+      - -X github.com/jpsdm/dev/cmd.BuildDate={{.Date}}
+
+archives:
+  - name_template: "dev_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - README.md
+      - LICENSE
+
+checksum:
+  name_template: "checksums.txt"
+  algorithm: sha256
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^Merge"
+
+release:
+  draft: true

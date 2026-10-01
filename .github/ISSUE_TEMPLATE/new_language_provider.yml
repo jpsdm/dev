@@ -1,0 +1,67 @@
+name: New language provider request
+description: Propose adding support for a new language/runtime to dev lang
+labels: ["enhancement", "new-provider"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        `dev` currently manages Node.js, Java, and Go. Adding a language
+        means implementing the `Runtime` interface
+        (`internal/runtime/runtime.go`) against that language's real
+        distribution mechanism — see `internal/runtime/node` and
+        `internal/runtime/java` for reference implementations, and
+        [CONTRIBUTING.md](https://github.com/jpsdm/dev/blob/main/CONTRIBUTING.md#adding-a-language-provider)
+        for the pattern.
+
+        The hard part is always the same: how does this language actually
+        distribute its releases? This template collects that research up
+        front so a maintainer can review the approach before any code
+        gets written.
+
+  - type: input
+    id: language
+    attributes:
+      label: Language / runtime
+      placeholder: "Python"
+    validations:
+      required: true
+
+  - type: textarea
+    id: distribution
+    attributes:
+      label: How does this language distribute its releases?
+      description: >-
+        A JSON index? A REST API? Per-OS/arch archive downloads? Link the
+        real, authoritative source (not a third-party mirror) — ideally
+        with an example of the actual response shape, verified live, not
+        from memory.
+    validations:
+      required: true
+
+  - type: textarea
+    id: checksum
+    attributes:
+      label: Checksum source
+      description: >-
+        Are checksums embedded in the same response as the download link
+        (like Java/Go), or fetched separately (like Node's SHASUMS file)?
+    validations:
+      required: true
+
+  - type: textarea
+    id: quirks
+    attributes:
+      label: Known platform quirks
+      description: >-
+        Anything like Java's macOS Contents/Home nesting — different
+        archive layouts per OS, missing builds for some OS/arch
+        combinations, OS/arch naming that doesn't match the platform's own
+        GOOS/GOARCH vocabulary, etc.
+
+  - type: checkboxes
+    id: willing
+    attributes:
+      label: Contribution
+      options:
+        - label: I'm willing to implement this myself (a maintainer will still review the design before code is written)
+        - label: I'm only proposing this — I don't plan to implement it

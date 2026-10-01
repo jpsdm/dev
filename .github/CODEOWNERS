@@ -1,0 +1,4 @@
+# Default owner for everything in the repo, unless a more specific rule
+# below overrides it. This file only has an effect once "Require review
+# from Code Owners" is enabled in branch protection settings for `main`.
+* @jpsdm
