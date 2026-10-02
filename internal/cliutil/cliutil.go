@@ -56,6 +56,11 @@ func Fstep(w io.Writer, format string, args ...any) {
 	fmt.Fprintf(w, "→ "+format+"\n", args...)
 }
 
+// Ferror writes a ✗-prefixed error message to w. See Fsuccess.
+func Ferror(w io.Writer, format string, args ...any) {
+	fmt.Fprintf(w, "✗ "+format+"\n", args...)
+}
+
 // Verbosef prints diagnostic detail to Stdout, but only when verbose
 // mode is enabled; it is a no-op otherwise.
 func Verbosef(format string, args ...any) {

@@ -2,8 +2,10 @@ package cmd
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -13,17 +15,42 @@ import (
 	"github.com/jpsdm/dev/internal/shell"
 )
 
-// skipOnWindowsRCFile skips a test that asserts on a shell rc file.
-// shell.Detect() unconditionally reports PowerShell on Windows, and
-// shell.RCPath now asks a real PowerShell process for its own
+// fakeLookPath overrides shell.LookPath for the duration of the test so
+// only the given binary names resolve, deterministically, regardless of
+// what's actually installed on the machine running `go test` — the
+// multi-shell loop in cmd/setup.go otherwise depends directly on the
+// real PATH, which varies across dev machines and CI images (this
+// project's own CI images, for instance, don't all have the same set
+// of shells installed).
+func fakeLookPath(t *testing.T, present ...string) {
+	t.Helper()
+	found := make(map[string]bool, len(present))
+	for _, name := range present {
+		found[name] = true
+	}
+	original := shell.LookPath
+	shell.LookPath = func(file string) (string, error) {
+		if found[file] {
+			return "/fake/" + file, nil
+		}
+		return "", exec.ErrNotFound
+	}
+	t.Cleanup(func() { shell.LookPath = original })
+}
+
+// skipOnWindowsRCFile skips a test that asserts on a specific rc-file
+// path. On a real Windows machine, PowerShell is essentially always
+// present (shell.RCPath asks a real PowerShell process for its own
 // $PROFILE value there — supported whenever pwsh or powershell is
-// reachable, true on essentially every real Windows machine (built-in
-// Windows PowerShell included). This skip stays conservative anyway:
-// a CI runner's actual $PROFILE value depends on its home-directory
-// layout and installed PowerShell version, neither knowable ahead of
-// time to assert against here, so these tests skip on Windows rather
-// than assert against a path only discoverable by actually running
-// the subprocess.
+// reachable at all, true on virtually every Windows install, built-in
+// Windows PowerShell included), so fakeLookPath(t, "bash") alone can't
+// exclude it from these tests' target list the way it does on
+// Linux/macOS. This skip stays conservative anyway: a CI runner's
+// actual $PROFILE value depends on its home-directory layout and
+// installed PowerShell version, neither knowable ahead of time to
+// assert against here, so these tests skip on Windows rather than
+// assert against a path only discoverable by actually running the
+// subprocess.
 func skipOnWindowsRCFile(t *testing.T) {
 	t.Helper()
 	if runtime.GOOS == "windows" {
@@ -46,6 +73,7 @@ func fakeInstalledDev(t *testing.T, devHome string) {
 }
 
 func TestSetupCommand_DeclinedConfirmationMakesNoChanges(t *testing.T) {
+	fakeLookPath(t, "bash")
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("DEV_HOME", t.TempDir())
@@ -78,6 +106,7 @@ func TestSetupCommand_DeclinedConfirmationMakesNoChanges(t *testing.T) {
 
 func TestSetupCommand_ConfirmedWritesRCFileWithTheDevFunction(t *testing.T) {
 	skipOnWindowsRCFile(t)
+	fakeLookPath(t, "bash")
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	devHome := t.TempDir()
@@ -141,16 +170,21 @@ func TestSetupCommand_UnsupportedShellStillConfirmable(t *testing.T) {
 		// be reliably reproduced on a real Windows host anymore.
 		t.Skip("RCPath(PowerShell) is supported on essentially every real Windows machine; this scenario isn't reproducible there")
 	}
+	// Nothing resolves via LookPath: no configurable shell is "present"
+	// at all, regardless of what's actually installed on the machine
+	// running this test — the only way to deterministically reproduce
+	// the "nothing to configure automatically" case this test exists
+	// for.
+	fakeLookPath(t)
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	devHome := t.TempDir()
 	t.Setenv("DEV_HOME", devHome)
 	// An unrecognized $SHELL makes shell.Detect() return Unknown on
-	// Linux/macOS, which takes the same "automatic rc-file editing not
-	// supported" path RCPath also gives PowerShell when no
-	// pwsh/powershell is reachable at all. The assertion below still
-	// computes the expected text via unsupportedShellMessage(runtime.GOOS)
-	// for generality across Linux/macOS — it just never sees "windows"
+	// Linux/macOS, which is what the manual-fallback section prints
+	// FunctionLines for. The assertion below still computes the
+	// expected text via unsupportedShellMessage(runtime.GOOS) for
+	// generality across Linux/macOS — it just never sees "windows"
 	// here now, since that case is skipped above.
 	t.Setenv("SHELL", "/bin/some-unrecognized-shell")
 	fakeInstalledDev(t, devHome)
@@ -179,7 +213,14 @@ func TestSetupCommand_UnsupportedShellStillConfirmable(t *testing.T) {
 	}
 }
 
-func TestSetupCommand_UnsupportedShellDeclinedMakesNoChanges(t *testing.T) {
+// TestSetupCommand_NoShellPresentPrintsManualInstructionsAndMakesNoChanges
+// covers the case where IsPresent finds nothing configurable at all
+// (an environment with none of bash/zsh/fish/pwsh/powershell on PATH,
+// and an unrecognized $SHELL): there is nothing to prompt for, so
+// `dev setup` must print Detect()'s manual-fallback instructions and
+// touch no rc file, without needing any confirmation to decline.
+func TestSetupCommand_NoShellPresentPrintsManualInstructionsAndMakesNoChanges(t *testing.T) {
+	fakeLookPath(t)
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	devHome := t.TempDir()
@@ -189,7 +230,7 @@ func TestSetupCommand_UnsupportedShellDeclinedMakesNoChanges(t *testing.T) {
 	var out bytes.Buffer
 	rootCmd.SetOut(&out)
 	rootCmd.SetErr(&out)
-	rootCmd.SetIn(strings.NewReader("n\n"))
+	rootCmd.SetIn(strings.NewReader(""))
 	rootCmd.SetArgs([]string{"setup"})
 	t.Cleanup(func() {
 		rootCmd.SetArgs(nil)
@@ -200,17 +241,20 @@ func TestSetupCommand_UnsupportedShellDeclinedMakesNoChanges(t *testing.T) {
 		t.Fatalf("`dev setup` returned error: %v", err)
 	}
 
-	binDir := filepath.Join(devHome, "bin")
-	if _, err := os.Stat(binDir); !os.IsNotExist(err) {
-		t.Errorf("declining confirmation still created a shim directory at %s", binDir)
+	for _, rc := range []string{".bashrc", ".zshrc", filepath.Join(".config", "fish", "config.fish")} {
+		path := filepath.Join(home, rc)
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Errorf("expected no shell to be auto-configured when nothing is present, but %s exists", path)
+		}
 	}
-	if !strings.Contains(out.String(), "No changes made.") {
-		t.Errorf("output = %q, want it to confirm no changes were made", out.String())
+	if !strings.Contains(out.String(), "dev() {") {
+		t.Errorf("output = %q, want it to print the dev wrapper function for manual setup", out.String())
 	}
 }
 
 func TestSetupCommand_RunningTwiceDoesNotDuplicateOrError(t *testing.T) {
 	skipOnWindowsRCFile(t)
+	fakeLookPath(t, "bash")
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	devHome := t.TempDir()
@@ -243,6 +287,273 @@ func TestSetupCommand_RunningTwiceDoesNotDuplicateOrError(t *testing.T) {
 	}
 	if strings.Count(string(data), "# BEGIN dev shell setup") != 1 {
 		t.Errorf("rc file = %q, want exactly one marker block after running `dev setup` twice", data)
+	}
+}
+
+// TestSetupCommand_ConfiguresEveryPresentShellInOneRun pins this
+// feature's core behavior: a machine with two shells installed (e.g.
+// Bash and Zsh on Linux, or PowerShell and Git Bash on Windows) gets
+// BOTH configured in a single `dev setup` run, not just whichever one
+// invoked it — the exact gap a real user hit (PowerShell configured,
+// Git Bash left with nothing).
+func TestSetupCommand_ConfiguresEveryPresentShellInOneRun(t *testing.T) {
+	skipOnWindowsRCFile(t)
+	fakeLookPath(t, "bash", "zsh")
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	devHome := t.TempDir()
+	t.Setenv("DEV_HOME", devHome)
+	t.Setenv("SHELL", "/bin/bash")
+	fakeInstalledDev(t, devHome)
+
+	var out bytes.Buffer
+	rootCmd.SetOut(&out)
+	rootCmd.SetErr(&out)
+	// One "y" per shell offered: Bash then Zsh, shell.Configurable()'s
+	// fixed order.
+	rootCmd.SetIn(strings.NewReader("y\ny\n"))
+	rootCmd.SetArgs([]string{"setup"})
+	t.Cleanup(func() {
+		rootCmd.SetArgs(nil)
+		rootCmd.SetIn(nil)
+	})
+
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("`dev setup` returned error: %v", err)
+	}
+
+	for _, rc := range []string{".bashrc", ".zshrc"} {
+		path := filepath.Join(home, rc)
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("reading %s: %v", path, err)
+		}
+		if !strings.Contains(string(data), "dev() {") {
+			t.Errorf("%s = %q, want it to contain the dev wrapper function", path, data)
+		}
+	}
+}
+
+// TestSetupCommand_SkipsAlreadyConfiguredShellOnRerun covers the
+// scenario the user asked for explicitly: PowerShell (here, Bash)
+// already configured by an earlier run, then Zsh installed afterward —
+// re-running `dev setup` must offer ONLY Zsh, not re-prompt for Bash's
+// already-current block.
+func TestSetupCommand_SkipsAlreadyConfiguredShellOnRerun(t *testing.T) {
+	skipOnWindowsRCFile(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	devHome := t.TempDir()
+	t.Setenv("DEV_HOME", devHome)
+	t.Setenv("SHELL", "/bin/bash")
+	fakeInstalledDev(t, devHome)
+
+	fakeLookPath(t, "bash")
+	var first bytes.Buffer
+	rootCmd.SetOut(&first)
+	rootCmd.SetErr(&first)
+	rootCmd.SetIn(strings.NewReader("y\n"))
+	rootCmd.SetArgs([]string{"setup"})
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("first `dev setup` returned error: %v", err)
+	}
+
+	// Zsh "installed" afterward.
+	fakeLookPath(t, "bash", "zsh")
+	var second bytes.Buffer
+	rootCmd.SetOut(&second)
+	rootCmd.SetErr(&second)
+	rootCmd.SetIn(strings.NewReader("y\n"))
+	rootCmd.SetArgs([]string{"setup"})
+	t.Cleanup(func() {
+		rootCmd.SetArgs(nil)
+		rootCmd.SetIn(nil)
+	})
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("second `dev setup` returned error: %v", err)
+	}
+
+	bashRC := filepath.Join(home, ".bashrc")
+	if strings.Contains(second.String(), fmt.Sprintf("added to %s", bashRC)) {
+		t.Errorf("second run output = %q, want it not to re-offer the already-current Bash block", second.String())
+	}
+	zshRC := filepath.Join(home, ".zshrc")
+	if !strings.Contains(second.String(), fmt.Sprintf("added to %s", zshRC)) {
+		t.Errorf("second run output = %q, want it to offer the newly-present Zsh block", second.String())
+	}
+	data, err := os.ReadFile(zshRC)
+	if err != nil {
+		t.Fatalf("reading %s: %v", zshRC, err)
+	}
+	if !strings.Contains(string(data), "dev() {") {
+		t.Errorf("%s = %q, want it to contain the dev wrapper function", zshRC, data)
+	}
+}
+
+// TestSetupCommand_DecliningOneShellStillWritesTheOther covers
+// independence between targets: declining Bash's prompt must not
+// prevent Zsh's own block from being written when Zsh is confirmed.
+func TestSetupCommand_DecliningOneShellStillWritesTheOther(t *testing.T) {
+	skipOnWindowsRCFile(t)
+	fakeLookPath(t, "bash", "zsh")
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	devHome := t.TempDir()
+	t.Setenv("DEV_HOME", devHome)
+	t.Setenv("SHELL", "/bin/bash")
+	fakeInstalledDev(t, devHome)
+
+	var out bytes.Buffer
+	rootCmd.SetOut(&out)
+	rootCmd.SetErr(&out)
+	// "n" for Bash (first, by Configurable()'s order), "y" for Zsh.
+	rootCmd.SetIn(strings.NewReader("n\ny\n"))
+	rootCmd.SetArgs([]string{"setup"})
+	t.Cleanup(func() {
+		rootCmd.SetArgs(nil)
+		rootCmd.SetIn(nil)
+	})
+
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("`dev setup` returned error: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(home, ".bashrc")); !os.IsNotExist(err) {
+		t.Errorf("expected .bashrc not to be created after declining its prompt, stat err=%v", err)
+	}
+	zshData, err := os.ReadFile(filepath.Join(home, ".zshrc"))
+	if err != nil {
+		t.Fatalf("reading .zshrc: %v", err)
+	}
+	if !strings.Contains(string(zshData), "dev() {") {
+		t.Errorf(".zshrc = %q, want it to contain the dev wrapper function despite Bash's prompt being declined", zshData)
+	}
+}
+
+// TestSetupCommand_OneCorruptedTargetDoesNotBlockTheOthers covers the
+// spec's per-target error-handling guarantee: a pre-existing rc file
+// UpsertBlock refuses to touch (an unterminated marker pair, here
+// .bashrc) must not stop a different, healthy target (.zshrc) from
+// still being offered and written in the same run. The command still
+// reports the failure via a non-nil error, so the user knows to fix
+// the broken file by hand, but only after every other target has had
+// its chance.
+func TestSetupCommand_OneCorruptedTargetDoesNotBlockTheOthers(t *testing.T) {
+	skipOnWindowsRCFile(t)
+	fakeLookPath(t, "bash", "zsh")
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	devHome := t.TempDir()
+	t.Setenv("DEV_HOME", devHome)
+	t.Setenv("SHELL", "/bin/bash")
+	fakeInstalledDev(t, devHome)
+
+	bashRC := filepath.Join(home, ".bashrc")
+	corrupted := "alias a='1'\n# BEGIN dev shell setup\nexport OLD=1\n"
+	if err := os.WriteFile(bashRC, []byte(corrupted), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	var out bytes.Buffer
+	rootCmd.SetOut(&out)
+	rootCmd.SetErr(&out)
+	// "y" for Bash's prompt (fails inside UpsertBlock), "y" for Zsh's.
+	rootCmd.SetIn(strings.NewReader("y\ny\n"))
+	rootCmd.SetArgs([]string{"setup"})
+	t.Cleanup(func() {
+		rootCmd.SetArgs(nil)
+		rootCmd.SetIn(nil)
+	})
+
+	err := rootCmd.Execute()
+	if err == nil {
+		t.Fatal("`dev setup` returned nil error, want it to report the corrupted .bashrc")
+	}
+
+	zshData, readErr := os.ReadFile(filepath.Join(home, ".zshrc"))
+	if readErr != nil {
+		t.Fatalf("reading .zshrc: %v", readErr)
+	}
+	if !strings.Contains(string(zshData), "dev() {") {
+		t.Errorf(".zshrc = %q, want it to contain the dev wrapper function despite .bashrc failing", zshData)
+	}
+	bashData, readErr := os.ReadFile(bashRC)
+	if readErr != nil {
+		t.Fatalf("reading .bashrc: %v", readErr)
+	}
+	if string(bashData) != corrupted {
+		t.Errorf(".bashrc = %q, want it left exactly as the corrupted original, untouched", bashData)
+	}
+}
+
+// TestSetupCommand_RCPathErrorAbortsImmediately covers a genuine
+// RCPath error (as opposed to supported=false) — an unresolvable
+// $HOME, the one real way to trigger this today — must abort the
+// whole command immediately, not be swallowed by the per-target
+// "report and continue" handling meant only for
+// BlockUpToDate/UpsertBlock failures.
+func TestSetupCommand_RCPathErrorAbortsImmediately(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("$HOME is not the profile-dir env var on windows")
+	}
+	fakeLookPath(t, "bash")
+	t.Setenv("HOME", "")
+	devHome := t.TempDir()
+	t.Setenv("DEV_HOME", devHome)
+	t.Setenv("SHELL", "/bin/bash")
+	fakeInstalledDev(t, devHome)
+
+	var out bytes.Buffer
+	rootCmd.SetOut(&out)
+	rootCmd.SetErr(&out)
+	rootCmd.SetArgs([]string{"setup"})
+	t.Cleanup(func() {
+		rootCmd.SetArgs(nil)
+	})
+
+	if err := rootCmd.Execute(); err == nil {
+		t.Fatal("`dev setup` returned nil error when $HOME is unresolvable")
+	}
+}
+
+// TestSetupCommand_PresentButRCPathUnsupportedDoesNotCountAsPresent
+// covers a shell that resolves via LookPath but whose RCPath reports
+// supported=false (here: a faked "pwsh" on PATH with no real
+// pwsh/powershell binary behind it, so the real $PROFILE subprocess
+// query genuinely fails) — it must not count toward `present`, so the
+// manual-fallback branch still triggers when that was the only
+// candidate.
+func TestSetupCommand_PresentButRCPathUnsupportedDoesNotCountAsPresent(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("on real Windows, pwsh/powershell's $PROFILE lookup succeeds almost always, defeating this test's premise")
+	}
+	fakeLookPath(t, "pwsh")
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	devHome := t.TempDir()
+	t.Setenv("DEV_HOME", devHome)
+	t.Setenv("SHELL", "/bin/some-unrecognized-shell")
+	fakeInstalledDev(t, devHome)
+
+	var out bytes.Buffer
+	rootCmd.SetOut(&out)
+	rootCmd.SetErr(&out)
+	rootCmd.SetIn(strings.NewReader(""))
+	rootCmd.SetArgs([]string{"setup"})
+	t.Cleanup(func() {
+		rootCmd.SetArgs(nil)
+		rootCmd.SetIn(nil)
+	})
+
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("`dev setup` returned error: %v", err)
+	}
+
+	if !strings.Contains(out.String(), "dev() {") {
+		t.Errorf("output = %q, want the manual-fallback instructions since the only present shell (PowerShell) isn't actually auto-editable here", out.String())
+	}
+	if _, err := os.Stat(filepath.Join(home, ".bashrc")); !os.IsNotExist(err) {
+		t.Error("expected no .bashrc to be created")
 	}
 }
 
@@ -371,6 +682,7 @@ func TestSetupCommand_SkipsRelocationWhenAlreadyInsideDevHome(t *testing.T) {
 	// is ever reached, which would make this test a duplicate of
 	// TestSetupCommand_DeclinedConfirmationMakesNoChanges rather than
 	// coverage of the guard.
+	fakeLookPath(t, "bash")
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	devHome := t.TempDir()
@@ -410,6 +722,7 @@ func TestSetupCommand_SkipsRelocationWhenAlreadyInsideDevHome(t *testing.T) {
 // TestSetupCommand_RelocatesDevAndDocsIntoDevHomeWhenConfirmed, which
 // calls installRelocation directly and bypasses the guard and prompt.
 func TestSetupCommand_OffersRelocationWhenNotYetInstalled(t *testing.T) {
+	fakeLookPath(t, "bash")
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	devHome := t.TempDir()
@@ -471,6 +784,7 @@ func TestSetupCommand_OffersRelocationWhenNotYetInstalled(t *testing.T) {
 // asserts the original binary is left in place and the rest of `dev
 // setup` (the rc file) still completes successfully.
 func TestSetupCommand_DeclinedRelocationPromptDoesNotAbortSetup(t *testing.T) {
+	fakeLookPath(t, "bash")
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	devHome := t.TempDir()

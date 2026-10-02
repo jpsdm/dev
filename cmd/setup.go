@@ -17,7 +17,7 @@ import (
 
 var setupCmd = &cobra.Command{
 	Use:   "setup",
-	Short: "Detect your shell and configure PATH (asks for confirmation)",
+	Short: "Detect every shell you have installed and configure PATH for each (asks for confirmation)",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		printBanner(cmd.OutOrStdout())
 
@@ -25,56 +25,89 @@ var setupCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		sh := shell.Detect()
-		lines := shell.FunctionLines(sh, devHome)
 
-		path, supported, err := shell.RCPath(sh)
-		if err != nil {
-			return err
+		// present tracks whether at least one configurable shell was
+		// actually found on this machine (installed and auto-editable)
+		// — independent of whether it needed any change. Only when
+		// this stays false do we fall back to printing manual
+		// instructions for Detect()'s single best guess, the same way
+		// dev setup always has for a shell it can't act on.
+		//
+		// targetErr tracks whether any individual target failed (a
+		// corrupted rc file UpsertBlock refuses to touch, say) — such a
+		// failure must not stop other targets in this same run from
+		// still being offered and written, so it's reported inline and
+		// only turned into RunE's own return value once the whole loop
+		// (and everything after it) has run to completion.
+		present := false
+		var targetErr error
+		for _, sh := range shell.Configurable() {
+			if !shell.IsPresent(sh) {
+				continue
+			}
+			path, supported, err := shell.RCPath(sh)
+			if err != nil {
+				return err
+			}
+			if !supported {
+				continue
+			}
+			present = true
+
+			lines := shell.FunctionLines(sh, devHome)
+			upToDate, err := shell.BlockUpToDate(path, lines)
+			if err != nil {
+				cliutil.Ferror(cmd.ErrOrStderr(), "checking %s: %v", path, err)
+				targetErr = err
+				continue
+			}
+			if upToDate {
+				continue
+			}
+
+			fmt.Fprintf(cmd.OutOrStdout(), "The following will be added to %s:\n\n", path)
+			for _, line := range lines {
+				fmt.Fprintln(cmd.OutOrStdout(), line)
+			}
+			fmt.Fprintln(cmd.OutOrStdout())
+
+			confirmed, err := shell.Confirm(fmt.Sprintf("Add this to %s? [y/N] ", path), cmd.InOrStdin(), cmd.OutOrStdout())
+			if err != nil {
+				return err
+			}
+			if !confirmed {
+				cliutil.Fstep(cmd.OutOrStdout(), "No changes made.")
+				continue
+			}
+
+			if err := shell.UpsertBlock(path, lines); err != nil {
+				cliutil.Ferror(cmd.ErrOrStderr(), "updating %s: %v", path, err)
+				targetErr = err
+				continue
+			}
+			cliutil.Fsuccess(cmd.OutOrStdout(), "Updated %s", path)
+			cliutil.Fstep(cmd.OutOrStdout(), "Restart your shell (or run `%s`) for these changes to take effect", reloadHint(sh, path))
 		}
 
-		if supported {
-			fmt.Fprintf(cmd.OutOrStdout(), "The following will be added to %s:\n\n", path)
-		} else {
+		if !present {
+			sh := shell.Detect()
 			fmt.Fprintln(cmd.OutOrStdout(), unsupportedShellMessage(runtime.GOOS))
 			fmt.Fprintln(cmd.OutOrStdout())
-		}
-		for _, line := range lines {
-			fmt.Fprintln(cmd.OutOrStdout(), line)
-		}
-		fmt.Fprintln(cmd.OutOrStdout())
-
-		prompt := "Set these up now? [y/N] "
-		if supported {
-			prompt = fmt.Sprintf("Add this to %s? [y/N] ", path)
-		}
-		confirmed, err := shell.Confirm(prompt, cmd.InOrStdin(), cmd.OutOrStdout())
-		if err != nil {
-			return err
-		}
-		if !confirmed {
-			cliutil.Fstep(cmd.OutOrStdout(), "No changes made.")
-			return nil
+			for _, line := range shell.FunctionLines(sh, devHome) {
+				fmt.Fprintln(cmd.OutOrStdout(), line)
+			}
+			fmt.Fprintln(cmd.OutOrStdout())
 		}
 
 		if err := relocateIfNeeded(cmd, devHome); err != nil {
 			return err
 		}
 
-		if supported {
-			if err := shell.UpsertBlock(path, lines); err != nil {
-				return fmt.Errorf("updating %s: %w", path, err)
-			}
-			cliutil.Fsuccess(cmd.OutOrStdout(), "Updated %s", path)
-			cliutil.Fstep(cmd.OutOrStdout(), "Restart your shell (or run `%s`) for these changes to take effect", reloadHint(sh, path))
-		}
-
-		// Independent of whether the profile/rc-file write above
-		// happened: the registry entries cover every Windows process
-		// (GUI apps, cmd.exe, a non-PowerShell integrated terminal),
-		// not just PowerShell sessions that load the written profile —
-		// so this is offered unconditionally on Windows, not only when
-		// the profile write was skipped.
+		// Independent of every shell loop/fallback above: the registry
+		// entries cover every Windows process (GUI apps, cmd.exe, a
+		// non-PowerShell integrated terminal), not just the shells
+		// whose rc file/profile got a function written to it — so
+		// this is offered unconditionally on Windows.
 		if runtime.GOOS == "windows" {
 			envConfirmed, err := shell.Confirm("Add these to your user environment now? [y/N] ", cmd.InOrStdin(), cmd.OutOrStdout())
 			if err != nil {
@@ -88,7 +121,7 @@ var setupCmd = &cobra.Command{
 				cliutil.Fsuccess(cmd.OutOrStdout(), "Updated your user environment (DEV_HOME and PATH)")
 			}
 		}
-		return nil
+		return targetErr
 	},
 }
 
