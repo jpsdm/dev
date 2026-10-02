@@ -32,26 +32,31 @@ const (
 	blockEnd   = "# END dev shell setup"
 )
 
-// Detect identifies the current shell, on Windows always reporting
-// PowerShell (this project's only supported Windows shell target for
-// now). On Unix, it prefers the actual process that launched this
-// invocation of dev (see parentShellDetector) over $SHELL, which is
-// only the user's configured *login* shell — a value that's often
-// stale or simply wrong for anyone who runs a different shell day to
-// day (they switched via `chsh` but the record wasn't updated, their
-// terminal profile launches a shell directly regardless of the login
-// shell, etc.). A real, running shell process is strictly better
-// evidence of "what shell is actually asking" than an inherited env
-// var; $SHELL remains the fallback when the parent process can't be
-// determined or isn't a shell this project recognizes.
+// Detect identifies the current shell. It prefers the actual process
+// that launched this invocation of dev (see parentShellDetector) over
+// $SHELL, which is only the user's configured *login* shell — a value
+// that's often stale or simply wrong for anyone who runs a different
+// shell day to day (they switched via `chsh` but the record wasn't
+// updated, their terminal profile launches a shell directly regardless
+// of the login shell, etc.). A real, running shell process is strictly
+// better evidence of "what shell is actually asking" than an inherited
+// env var; $SHELL remains the fallback when the parent process can't
+// be determined or isn't a shell this project recognizes. On Windows,
+// where neither signal is conclusive (e.g. dev launched from Explorer,
+// a VS Code task, or Windows Terminal itself rather than a shell
+// directly), the final fallback is PowerShell — it ships with every
+// Windows install, unlike Bash.
 func Detect() Shell {
-	if runtime.GOOS == "windows" {
-		return PowerShell
-	}
 	if sh, ok := parentShellDetector(); ok {
 		return sh
 	}
-	return shellFromEnv(os.Getenv("SHELL"))
+	if sh := shellFromEnv(os.Getenv("SHELL")); sh != Unknown {
+		return sh
+	}
+	if runtime.GOOS == "windows" {
+		return PowerShell
+	}
+	return Unknown
 }
 
 // parentShellDetector backs Detect()'s parent-process lookup; a
@@ -84,6 +89,11 @@ func shellFromName(name string) (Shell, bool) {
 		return Zsh, true
 	case "fish":
 		return Fish, true
+	case "powershell", "pwsh":
+		// "pwsh" is PowerShell 7+ (cross-platform); "powershell" is
+		// Windows PowerShell 5.1, Windows-only but still the default
+		// there on many machines.
+		return PowerShell, true
 	default:
 		return Unknown, false
 	}
@@ -116,6 +126,8 @@ func parentCommName(goos string, pid int) (string, bool) {
 		return parentCommNameLinux(pid)
 	case "darwin":
 		return parentCommNameDarwin(pid)
+	case "windows":
+		return parentCommNameWindows(pid)
 	default:
 		return "", false
 	}
@@ -510,6 +522,62 @@ func defaultPowershellProfilePath() (path string, ok bool) {
 		return trimmed, true
 	}
 	return "", false
+}
+
+// Configurable returns every shell dev setup knows how to configure, in
+// a fixed, deterministic order (so prompts always appear in the same
+// order across runs). Unknown is deliberately excluded: it isn't a
+// concrete shell dev could write an rc file for.
+func Configurable() []Shell {
+	return []Shell{Bash, Zsh, Fish, PowerShell}
+}
+
+// lookupNames pairs each Configurable shell with the PATH binary
+// name(s) that indicate it's installed on this machine. PowerShell
+// lists both names because either a Windows PowerShell 5.1 ("powershell")
+// or a PowerShell 7+ ("pwsh") install counts as present.
+var lookupNames = map[Shell][]string{
+	Bash:       {"bash"},
+	Zsh:        {"zsh"},
+	Fish:       {"fish"},
+	PowerShell: {"pwsh", "powershell"},
+}
+
+// LookPath is exec.LookPath, as a package-level var so tests (in this
+// package and in cmd) can control which shells appear "installed"
+// without depending on whatever is actually on PATH on the machine
+// running `go test` — the same seam pattern as platform.Executable.
+var LookPath = exec.LookPath
+
+// IsPresent reports whether sh appears to be installed on this
+// machine: any of its lookupNames resolves via LookPath, or sh is what
+// Detect() reports for the current process (covers an install that's
+// genuinely running right now but not found via LookPath, e.g. an
+// unusual install location not on PATH).
+func IsPresent(sh Shell) bool {
+	for _, name := range lookupNames[sh] {
+		if _, err := LookPath(name); err == nil {
+			return true
+		}
+	}
+	return Detect() == sh
+}
+
+// BlockUpToDate reports whether path already contains exactly the
+// block UpsertBlock(path, lines) would write — a missing file counts
+// as "not up to date," never as an error. This is what lets dev setup
+// silently skip a shell it already configured on a prior run, so a
+// second run only surfaces what's actually new.
+func BlockUpToDate(path string, lines []string) (bool, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("reading %s: %w", path, err)
+	}
+	block := strings.Join(append(append([]string{blockBegin}, lines...), blockEnd), "\n")
+	return strings.Contains(string(data), block), nil
 }
 
 // UpsertBlock writes lines into path between a marker pair, replacing an

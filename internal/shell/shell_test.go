@@ -25,9 +25,6 @@ func withNoParentShellSignal(t *testing.T) {
 }
 
 func TestDetect_UsesShellEnvVar(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("Detect() always reports PowerShell on windows")
-	}
 	withNoParentShellSignal(t)
 	t.Setenv("SHELL", "/bin/zsh")
 	if got := Detect(); got != Zsh {
@@ -37,7 +34,7 @@ func TestDetect_UsesShellEnvVar(t *testing.T) {
 
 func TestDetect_UnknownShellFallsBackToUnknown(t *testing.T) {
 	if runtime.GOOS == "windows" {
-		t.Skip("Detect() always reports PowerShell on windows")
+		t.Skip("on Windows, an unrecognized/inconclusive shell signal falls back to PowerShell, not Unknown — see TestDetect_WindowsDefaultsToPowerShellWhenNothingConclusive")
 	}
 	withNoParentShellSignal(t)
 	t.Setenv("SHELL", "/bin/tcsh")
@@ -46,10 +43,18 @@ func TestDetect_UnknownShellFallsBackToUnknown(t *testing.T) {
 	}
 }
 
-func TestDetect_PrefersParentProcessOverAStaleShellEnvVar(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("Detect() always reports PowerShell on windows")
+func TestDetect_WindowsDefaultsToPowerShellWhenNothingConclusive(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("exercises Detect()'s Windows-only final fallback")
 	}
+	withNoParentShellSignal(t)
+	t.Setenv("SHELL", "/bin/tcsh")
+	if got := Detect(); got != PowerShell {
+		t.Errorf("Detect() = %v, want PowerShell (Windows's final fallback when neither signal is conclusive)", got)
+	}
+}
+
+func TestDetect_PrefersParentProcessOverAStaleShellEnvVar(t *testing.T) {
 	// The exact real-world bug this whole change fixes: $SHELL (the
 	// configured *login* shell) says bash, but the process that
 	// actually launched this invocation — resolved independently of
@@ -67,9 +72,6 @@ func TestDetect_PrefersParentProcessOverAStaleShellEnvVar(t *testing.T) {
 }
 
 func TestDetect_FallsBackToShellEnvVarWhenParentProcessIsInconclusive(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("Detect() always reports PowerShell on windows")
-	}
 	// An inconclusive parent-process lookup (unsupported platform, a
 	// permission error, a parent that isn't a known shell at all —
 	// e.g. dev invoked from a Makefile or another program) must not
@@ -173,7 +175,13 @@ func TestParseCommOutput_BlankIsInconclusive(t *testing.T) {
 
 func TestShellFromName_MapsKnownShellNames(t *testing.T) {
 	t.Parallel()
-	cases := map[string]Shell{"bash": Bash, "zsh": Zsh, "fish": Fish}
+	cases := map[string]Shell{
+		"bash":       Bash,
+		"zsh":        Zsh,
+		"fish":       Fish,
+		"powershell": PowerShell,
+		"pwsh":       PowerShell,
+	}
 	for name, want := range cases {
 		if got, ok := shellFromName(name); !ok || got != want {
 			t.Errorf("shellFromName(%q) = (%v, %v), want (%v, true)", name, got, ok, want)
@@ -808,6 +816,111 @@ func TestUpsertBlock_UnterminatedBlockReturnsErrorWithoutTruncating(t *testing.T
 	}
 	if string(got) != original {
 		t.Errorf("UpsertBlock() modified the file despite returning an error: got %q, want unchanged %q", got, original)
+	}
+}
+
+func TestConfigurable_ReturnsTheFourKnownShellsInAFixedOrder(t *testing.T) {
+	t.Parallel()
+	got := Configurable()
+	want := []Shell{Bash, Zsh, Fish, PowerShell}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("Configurable() = %v, want %v", got, want)
+	}
+}
+
+// withLookPath overrides LookPath for the duration of the test so only
+// the given names resolve, deterministically, regardless of what's
+// actually installed on the machine running `go test`.
+func withLookPath(t *testing.T, present ...string) {
+	t.Helper()
+	found := make(map[string]bool, len(present))
+	for _, name := range present {
+		found[name] = true
+	}
+	orig := LookPath
+	LookPath = func(file string) (string, error) {
+		if found[file] {
+			return "/fake/" + file, nil
+		}
+		return "", exec.ErrNotFound
+	}
+	t.Cleanup(func() { LookPath = orig })
+}
+
+func TestIsPresent_TrueWhenLookupNameResolves(t *testing.T) {
+	withLookPath(t, "zsh")
+	if !IsPresent(Zsh) {
+		t.Error("IsPresent(Zsh) = false, want true when \"zsh\" resolves via LookPath")
+	}
+}
+
+func TestIsPresent_FalseWhenNoLookupNameResolvesAndNotTheDetectedShell(t *testing.T) {
+	withLookPath(t) // nothing resolves
+	withNoParentShellSignal(t)
+	t.Setenv("SHELL", "/bin/bash") // Detect() -> Bash, not Fish
+	if IsPresent(Fish) {
+		t.Error("IsPresent(Fish) = true, want false when fish isn't on PATH and isn't the detected shell")
+	}
+}
+
+func TestIsPresent_TrueWhenItsTheCurrentlyDetectedShellEvenIfNotOnPath(t *testing.T) {
+	withLookPath(t) // nothing resolves via LookPath
+	orig := parentShellDetector
+	parentShellDetector = func() (Shell, bool) { return Fish, true }
+	t.Cleanup(func() { parentShellDetector = orig })
+
+	if !IsPresent(Fish) {
+		t.Error("IsPresent(Fish) = false, want true when Fish is the currently-detected shell, even with no lookupNames match")
+	}
+}
+
+func TestIsPresent_PowerShellResolvesEitherBinaryName(t *testing.T) {
+	withLookPath(t, "pwsh")
+	if !IsPresent(PowerShell) {
+		t.Error("IsPresent(PowerShell) = false, want true when only \"pwsh\" (not \"powershell\") resolves")
+	}
+}
+
+func TestBlockUpToDate_FalseForAMissingFile(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "rc")
+	got, err := BlockUpToDate(path, []string{"export X=1"})
+	if err != nil {
+		t.Fatalf("BlockUpToDate() returned error: %v", err)
+	}
+	if got {
+		t.Error("BlockUpToDate() = true for a file that doesn't exist, want false")
+	}
+}
+
+func TestBlockUpToDate_TrueAfterUpsertBlockWroteTheSameLines(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "rc")
+	lines := []string{"export DEV_HOME=/home/u/.dev", "export PATH=\"$DEV_HOME:$PATH\""}
+	if err := UpsertBlock(path, lines); err != nil {
+		t.Fatalf("UpsertBlock() returned error: %v", err)
+	}
+	got, err := BlockUpToDate(path, lines)
+	if err != nil {
+		t.Fatalf("BlockUpToDate() returned error: %v", err)
+	}
+	if !got {
+		t.Error("BlockUpToDate() = false right after UpsertBlock wrote the exact same lines, want true")
+	}
+}
+
+func TestBlockUpToDate_FalseWhenLinesDiffer(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "rc")
+	if err := UpsertBlock(path, []string{"export OLD=1"}); err != nil {
+		t.Fatalf("UpsertBlock() returned error: %v", err)
+	}
+	got, err := BlockUpToDate(path, []string{"export NEW=1"})
+	if err != nil {
+		t.Fatalf("BlockUpToDate() returned error: %v", err)
+	}
+	if got {
+		t.Error("BlockUpToDate() = true for a file whose block content differs, want false")
 	}
 }
 

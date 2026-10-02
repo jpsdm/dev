@@ -120,6 +120,14 @@ func TestFstep_WritesToGivenWriter(t *testing.T) {
 	}
 }
 
+func TestFerror_WritesToGivenWriter(t *testing.T) {
+	var buf bytes.Buffer
+	Ferror(&buf, "updating %s failed", "/home/u/.bashrc")
+	if got := buf.String(); got != "✗ updating /home/u/.bashrc failed\n" {
+		t.Errorf("Ferror() output = %q", got)
+	}
+}
+
 func TestPrintError_VerboseShowsErrorChain(t *testing.T) {
 	withCapturedOutput(t, func(_, stderr *bytes.Buffer) {
 		SetVerbose(true)

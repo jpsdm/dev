@@ -30,21 +30,30 @@ flat, no subfolder.
 1. creates `$DEV_HOME` (`~/.dev` unless you set `DEV_HOME` yourself);
 2. offers to move `dev`, `README.md`, and `LICENSE` into `$DEV_HOME`
    itself — **answer yes**, this is what actually installs `dev`;
-3. detects your shell and, with your confirmation, installs a small
-   `dev` shell function (not a separate binary) into your shell's rc
-   file. The function runs the real `dev` command, then — only after
-   `dev lang`/`dev l` — refreshes `PATH` in your current shell so a
+3. detects every shell you have installed and, with your confirmation,
+   installs a small `dev` shell function (not a separate binary) into
+   each one's rc file/profile — not just whichever shell happens to be
+   running `dev setup`. On Windows, for instance, having both PowerShell
+   and Git Bash installed can get both configured in one run — Git Bash
+   is detected when its `bash` is reachable on `PATH`, or when `dev
+   setup` is itself run from inside it (a default Git for Windows
+   install doesn't always put `bash` on `PATH`, so the latter may be
+   needed). The function runs the real `dev` command, then — only
+   after `dev lang`/`dev l` — refreshes `PATH` in your current shell so a
    newly-activated version takes effect immediately, no restart
    needed. The function puts `$DEV_HOME` on your `PATH`, where `dev`
    itself lives, and adds each language's currently-active version's
-   own `bin` directory directly — no copies, no symlinks. On
-   Linux/macOS this is a marked block added to your shell's rc file;
-   on Windows, which has no profile file `dev` can safely auto-edit,
-   it prints the function to add by hand and offers to write your
-   user environment variables directly instead.
+   own `bin` directory directly — no copies, no symlinks. Re-running
+   `dev setup` later (after installing a shell that wasn't present
+   before) only offers what's new — an already-configured shell is
+   left untouched. A shell dev can't safely auto-edit (or can't detect
+   at all) gets the function printed to add by hand instead; on
+   Windows, `dev setup` also offers to write your user environment
+   variables directly.
 
-Each of those steps asks for confirmation first; declining the very
-first question exits without touching your machine at all.
+Nothing is written to your machine without answering yes to its specific
+question — declining one doesn't skip the rest, it just means that
+particular thing isn't done.
 
 Once you've confirmed the move, the folder you extracted into is empty
 and can be deleted. Restart your shell (or source the rc file `setup`
