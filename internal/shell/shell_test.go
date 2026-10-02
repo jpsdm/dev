@@ -25,9 +25,6 @@ func withNoParentShellSignal(t *testing.T) {
 }
 
 func TestDetect_UsesShellEnvVar(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("Detect() always reports PowerShell on windows")
-	}
 	withNoParentShellSignal(t)
 	t.Setenv("SHELL", "/bin/zsh")
 	if got := Detect(); got != Zsh {
@@ -37,7 +34,7 @@ func TestDetect_UsesShellEnvVar(t *testing.T) {
 
 func TestDetect_UnknownShellFallsBackToUnknown(t *testing.T) {
 	if runtime.GOOS == "windows" {
-		t.Skip("Detect() always reports PowerShell on windows")
+		t.Skip("on Windows, an unrecognized/inconclusive shell signal falls back to PowerShell, not Unknown — see TestDetect_WindowsDefaultsToPowerShellWhenNothingConclusive")
 	}
 	withNoParentShellSignal(t)
 	t.Setenv("SHELL", "/bin/tcsh")
@@ -46,10 +43,18 @@ func TestDetect_UnknownShellFallsBackToUnknown(t *testing.T) {
 	}
 }
 
-func TestDetect_PrefersParentProcessOverAStaleShellEnvVar(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("Detect() always reports PowerShell on windows")
+func TestDetect_WindowsDefaultsToPowerShellWhenNothingConclusive(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("exercises Detect()'s Windows-only final fallback")
 	}
+	withNoParentShellSignal(t)
+	t.Setenv("SHELL", "/bin/tcsh")
+	if got := Detect(); got != PowerShell {
+		t.Errorf("Detect() = %v, want PowerShell (Windows's final fallback when neither signal is conclusive)", got)
+	}
+}
+
+func TestDetect_PrefersParentProcessOverAStaleShellEnvVar(t *testing.T) {
 	// The exact real-world bug this whole change fixes: $SHELL (the
 	// configured *login* shell) says bash, but the process that
 	// actually launched this invocation — resolved independently of
@@ -67,9 +72,6 @@ func TestDetect_PrefersParentProcessOverAStaleShellEnvVar(t *testing.T) {
 }
 
 func TestDetect_FallsBackToShellEnvVarWhenParentProcessIsInconclusive(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("Detect() always reports PowerShell on windows")
-	}
 	// An inconclusive parent-process lookup (unsupported platform, a
 	// permission error, a parent that isn't a known shell at all —
 	// e.g. dev invoked from a Makefile or another program) must not
@@ -173,7 +175,13 @@ func TestParseCommOutput_BlankIsInconclusive(t *testing.T) {
 
 func TestShellFromName_MapsKnownShellNames(t *testing.T) {
 	t.Parallel()
-	cases := map[string]Shell{"bash": Bash, "zsh": Zsh, "fish": Fish}
+	cases := map[string]Shell{
+		"bash":       Bash,
+		"zsh":        Zsh,
+		"fish":       Fish,
+		"powershell": PowerShell,
+		"pwsh":       PowerShell,
+	}
 	for name, want := range cases {
 		if got, ok := shellFromName(name); !ok || got != want {
 			t.Errorf("shellFromName(%q) = (%v, %v), want (%v, true)", name, got, ok, want)

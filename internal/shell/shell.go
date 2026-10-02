@@ -32,26 +32,31 @@ const (
 	blockEnd   = "# END dev shell setup"
 )
 
-// Detect identifies the current shell, on Windows always reporting
-// PowerShell (this project's only supported Windows shell target for
-// now). On Unix, it prefers the actual process that launched this
-// invocation of dev (see parentShellDetector) over $SHELL, which is
-// only the user's configured *login* shell — a value that's often
-// stale or simply wrong for anyone who runs a different shell day to
-// day (they switched via `chsh` but the record wasn't updated, their
-// terminal profile launches a shell directly regardless of the login
-// shell, etc.). A real, running shell process is strictly better
-// evidence of "what shell is actually asking" than an inherited env
-// var; $SHELL remains the fallback when the parent process can't be
-// determined or isn't a shell this project recognizes.
+// Detect identifies the current shell. It prefers the actual process
+// that launched this invocation of dev (see parentShellDetector) over
+// $SHELL, which is only the user's configured *login* shell — a value
+// that's often stale or simply wrong for anyone who runs a different
+// shell day to day (they switched via `chsh` but the record wasn't
+// updated, their terminal profile launches a shell directly regardless
+// of the login shell, etc.). A real, running shell process is strictly
+// better evidence of "what shell is actually asking" than an inherited
+// env var; $SHELL remains the fallback when the parent process can't
+// be determined or isn't a shell this project recognizes. On Windows,
+// where neither signal is conclusive (e.g. dev launched from Explorer,
+// a VS Code task, or Windows Terminal itself rather than a shell
+// directly), the final fallback is PowerShell — it ships with every
+// Windows install, unlike Bash.
 func Detect() Shell {
-	if runtime.GOOS == "windows" {
-		return PowerShell
-	}
 	if sh, ok := parentShellDetector(); ok {
 		return sh
 	}
-	return shellFromEnv(os.Getenv("SHELL"))
+	if sh := shellFromEnv(os.Getenv("SHELL")); sh != Unknown {
+		return sh
+	}
+	if runtime.GOOS == "windows" {
+		return PowerShell
+	}
+	return Unknown
 }
 
 // parentShellDetector backs Detect()'s parent-process lookup; a
@@ -84,6 +89,11 @@ func shellFromName(name string) (Shell, bool) {
 		return Zsh, true
 	case "fish":
 		return Fish, true
+	case "powershell", "pwsh":
+		// "pwsh" is PowerShell 7+ (cross-platform); "powershell" is
+		// Windows PowerShell 5.1, Windows-only but still the default
+		// there on many machines.
+		return PowerShell, true
 	default:
 		return Unknown, false
 	}
