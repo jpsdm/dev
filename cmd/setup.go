@@ -76,7 +76,7 @@ var setupCmd = &cobra.Command{
 				return err
 			}
 			if !confirmed {
-				cliutil.Fstep(cmd.OutOrStdout(), "No changes made.")
+				cliutil.Fstep(cmd.OutOrStdout(), "Skipped %s", path)
 				continue
 			}
 

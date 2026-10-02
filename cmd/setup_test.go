@@ -99,7 +99,7 @@ func TestSetupCommand_DeclinedConfirmationMakesNoChanges(t *testing.T) {
 			t.Errorf("declining confirmation still created %s", rcPath)
 		}
 	}
-	if !strings.Contains(out.String(), "No changes made.") {
+	if !strings.Contains(out.String(), "Skipped") {
 		t.Errorf("output = %q, want it to confirm no changes were made", out.String())
 	}
 }
@@ -220,6 +220,9 @@ func TestSetupCommand_UnsupportedShellStillConfirmable(t *testing.T) {
 // `dev setup` must print Detect()'s manual-fallback instructions and
 // touch no rc file, without needing any confirmation to decline.
 func TestSetupCommand_NoShellPresentPrintsManualInstructionsAndMakesNoChanges(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("PowerShell is always present on Windows, so this test's \"nothing present\" premise isn't reproducible there")
+	}
 	fakeLookPath(t)
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -526,6 +529,12 @@ func TestSetupCommand_RCPathErrorAbortsImmediately(t *testing.T) {
 func TestSetupCommand_PresentButRCPathUnsupportedDoesNotCountAsPresent(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("on real Windows, pwsh/powershell's $PROFILE lookup succeeds almost always, defeating this test's premise")
+	}
+	if _, err := exec.LookPath("pwsh"); err == nil {
+		t.Skip("pwsh is installed on this machine; this test needs a real pwsh/powershell absence to prove present-but-unsupported")
+	}
+	if _, err := exec.LookPath("powershell"); err == nil {
+		t.Skip("powershell is installed on this machine; this test needs a real pwsh/powershell absence to prove present-but-unsupported")
 	}
 	fakeLookPath(t, "pwsh")
 	home := t.TempDir()
