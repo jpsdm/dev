@@ -126,6 +126,8 @@ func parentCommName(goos string, pid int) (string, bool) {
 		return parentCommNameLinux(pid)
 	case "darwin":
 		return parentCommNameDarwin(pid)
+	case "windows":
+		return parentCommNameWindows(pid)
 	default:
 		return "", false
 	}
