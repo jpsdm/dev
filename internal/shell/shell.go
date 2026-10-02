@@ -524,6 +524,62 @@ func defaultPowershellProfilePath() (path string, ok bool) {
 	return "", false
 }
 
+// Configurable returns every shell dev setup knows how to configure, in
+// a fixed, deterministic order (so prompts always appear in the same
+// order across runs). Unknown is deliberately excluded: it isn't a
+// concrete shell dev could write an rc file for.
+func Configurable() []Shell {
+	return []Shell{Bash, Zsh, Fish, PowerShell}
+}
+
+// lookupNames pairs each Configurable shell with the PATH binary
+// name(s) that indicate it's installed on this machine. PowerShell
+// lists both names because either a Windows PowerShell 5.1 ("powershell")
+// or a PowerShell 7+ ("pwsh") install counts as present.
+var lookupNames = map[Shell][]string{
+	Bash:       {"bash"},
+	Zsh:        {"zsh"},
+	Fish:       {"fish"},
+	PowerShell: {"pwsh", "powershell"},
+}
+
+// LookPath is exec.LookPath, as a package-level var so tests (in this
+// package and in cmd) can control which shells appear "installed"
+// without depending on whatever is actually on PATH on the machine
+// running `go test` — the same seam pattern as platform.Executable.
+var LookPath = exec.LookPath
+
+// IsPresent reports whether sh appears to be installed on this
+// machine: any of its lookupNames resolves via LookPath, or sh is what
+// Detect() reports for the current process (covers an install that's
+// genuinely running right now but not found via LookPath, e.g. an
+// unusual install location not on PATH).
+func IsPresent(sh Shell) bool {
+	for _, name := range lookupNames[sh] {
+		if _, err := LookPath(name); err == nil {
+			return true
+		}
+	}
+	return Detect() == sh
+}
+
+// BlockUpToDate reports whether path already contains exactly the
+// block UpsertBlock(path, lines) would write — a missing file counts
+// as "not up to date," never as an error. This is what lets dev setup
+// silently skip a shell it already configured on a prior run, so a
+// second run only surfaces what's actually new.
+func BlockUpToDate(path string, lines []string) (bool, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("reading %s: %w", path, err)
+	}
+	block := strings.Join(append(append([]string{blockBegin}, lines...), blockEnd), "\n")
+	return strings.Contains(string(data), block), nil
+}
+
 // UpsertBlock writes lines into path between a marker pair, replacing an
 // existing block if one is present or appending a new one if not.
 // Creates path's parent directory and the file itself if neither exists.

@@ -819,6 +819,111 @@ func TestUpsertBlock_UnterminatedBlockReturnsErrorWithoutTruncating(t *testing.T
 	}
 }
 
+func TestConfigurable_ReturnsTheFourKnownShellsInAFixedOrder(t *testing.T) {
+	t.Parallel()
+	got := Configurable()
+	want := []Shell{Bash, Zsh, Fish, PowerShell}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("Configurable() = %v, want %v", got, want)
+	}
+}
+
+// withLookPath overrides LookPath for the duration of the test so only
+// the given names resolve, deterministically, regardless of what's
+// actually installed on the machine running `go test`.
+func withLookPath(t *testing.T, present ...string) {
+	t.Helper()
+	found := make(map[string]bool, len(present))
+	for _, name := range present {
+		found[name] = true
+	}
+	orig := LookPath
+	LookPath = func(file string) (string, error) {
+		if found[file] {
+			return "/fake/" + file, nil
+		}
+		return "", exec.ErrNotFound
+	}
+	t.Cleanup(func() { LookPath = orig })
+}
+
+func TestIsPresent_TrueWhenLookupNameResolves(t *testing.T) {
+	withLookPath(t, "zsh")
+	if !IsPresent(Zsh) {
+		t.Error("IsPresent(Zsh) = false, want true when \"zsh\" resolves via LookPath")
+	}
+}
+
+func TestIsPresent_FalseWhenNoLookupNameResolvesAndNotTheDetectedShell(t *testing.T) {
+	withLookPath(t) // nothing resolves
+	withNoParentShellSignal(t)
+	t.Setenv("SHELL", "/bin/bash") // Detect() -> Bash, not Fish
+	if IsPresent(Fish) {
+		t.Error("IsPresent(Fish) = true, want false when fish isn't on PATH and isn't the detected shell")
+	}
+}
+
+func TestIsPresent_TrueWhenItsTheCurrentlyDetectedShellEvenIfNotOnPath(t *testing.T) {
+	withLookPath(t) // nothing resolves via LookPath
+	orig := parentShellDetector
+	parentShellDetector = func() (Shell, bool) { return Fish, true }
+	t.Cleanup(func() { parentShellDetector = orig })
+
+	if !IsPresent(Fish) {
+		t.Error("IsPresent(Fish) = false, want true when Fish is the currently-detected shell, even with no lookupNames match")
+	}
+}
+
+func TestIsPresent_PowerShellResolvesEitherBinaryName(t *testing.T) {
+	withLookPath(t, "pwsh")
+	if !IsPresent(PowerShell) {
+		t.Error("IsPresent(PowerShell) = false, want true when only \"pwsh\" (not \"powershell\") resolves")
+	}
+}
+
+func TestBlockUpToDate_FalseForAMissingFile(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "rc")
+	got, err := BlockUpToDate(path, []string{"export X=1"})
+	if err != nil {
+		t.Fatalf("BlockUpToDate() returned error: %v", err)
+	}
+	if got {
+		t.Error("BlockUpToDate() = true for a file that doesn't exist, want false")
+	}
+}
+
+func TestBlockUpToDate_TrueAfterUpsertBlockWroteTheSameLines(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "rc")
+	lines := []string{"export DEV_HOME=/home/u/.dev", "export PATH=\"$DEV_HOME:$PATH\""}
+	if err := UpsertBlock(path, lines); err != nil {
+		t.Fatalf("UpsertBlock() returned error: %v", err)
+	}
+	got, err := BlockUpToDate(path, lines)
+	if err != nil {
+		t.Fatalf("BlockUpToDate() returned error: %v", err)
+	}
+	if !got {
+		t.Error("BlockUpToDate() = false right after UpsertBlock wrote the exact same lines, want true")
+	}
+}
+
+func TestBlockUpToDate_FalseWhenLinesDiffer(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "rc")
+	if err := UpsertBlock(path, []string{"export OLD=1"}); err != nil {
+		t.Fatalf("UpsertBlock() returned error: %v", err)
+	}
+	got, err := BlockUpToDate(path, []string{"export NEW=1"})
+	if err != nil {
+		t.Fatalf("BlockUpToDate() returned error: %v", err)
+	}
+	if got {
+		t.Error("BlockUpToDate() = true for a file whose block content differs, want false")
+	}
+}
+
 func TestConfirm_AcceptsYAndYes(t *testing.T) {
 	t.Parallel()
 	for _, input := range []string{"y", "Y", "yes", "YES", " y \n"} {
