@@ -616,7 +616,6 @@ EOF
 ### Task 4: `cmd/setup.go` — the multi-shell loop, test overhaul, and README update
 
 **Files:**
-- Create: `internal/cliutil/cliutil.go` — no, modify (add `Ferror`)
 - Modify: `internal/cliutil/cliutil.go` (add `Ferror`, next to `Fsuccess`/`Fstep`)
 - Test: `internal/cliutil/cliutil_test.go` (add `TestFerror_WritesToGivenWriter`)
 - Modify: `cmd/setup.go` (the whole shell-configuration section of `RunE`)
