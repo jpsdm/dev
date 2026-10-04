@@ -61,3 +61,31 @@ func TestRegister_RegistersPython(t *testing.T) {
 		t.Errorf(`Get("python").Name() = %q, want "python"`, r.Name())
 	}
 }
+
+func TestRegister_RegistersBun(t *testing.T) {
+	t.Parallel()
+	m := runtime.NewManager()
+	Register(m)
+
+	r, ok := m.Get("bun")
+	if !ok {
+		t.Fatal(`Get("bun") ok = false after Register(), want true`)
+	}
+	if r.Name() != "bun" {
+		t.Errorf(`Get("bun").Name() = %q, want "bun"`, r.Name())
+	}
+}
+
+func TestRegister_RegistersRust(t *testing.T) {
+	t.Parallel()
+	m := runtime.NewManager()
+	Register(m)
+
+	r, ok := m.Get("rust")
+	if !ok {
+		t.Fatal(`Get("rust") ok = false after Register(), want true`)
+	}
+	if r.Name() != "rust" {
+		t.Errorf(`Get("rust").Name() = %q, want "rust"`, r.Name())
+	}
+}
