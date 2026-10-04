@@ -141,7 +141,21 @@ Aliases: `l` for `lang`, `ls` for `list`, `c` for `current`, `i` for
 `install`, `u` for `use`.
 
 Currently supported languages: Node.js, Java (Eclipse Temurin), Go, Python
-(via python-build-standalone).
+(via python-build-standalone), Bun, Rust.
+
+Bun and Rust are installed by `major.minor` line like Go (`dev lang install
+bun 1.4`, `dev lang install rust 1.85`), resolving to the newest patch on
+that line. Both look versions up through GitHub's releases API, so very old
+lines that have fallen out of its most recent 100 releases aren't offered,
+and an unauthenticated machine is subject to GitHub's rate limit (an
+already-installed line keeps working offline). Bun lines whose releases
+predate GitHub publishing a sha256 digest for release assets (before 1.2)
+aren't offered, since there would be nothing to verify the download against. Rust installs the standalone
+toolchain (`rustc`, `cargo`, `rust-std`, and the other default components —
+not the offline docs) rather than going through `rustup`; `cargo install`
+still writes to `~/.cargo/bin`, outside any managed version, like Go's
+`go install`. On Windows, Rust is the MSVC toolchain and needs the Visual
+Studio Build Tools to link, exactly as with `rustup`.
 
 The Java majors listed by `dev lang list java` are all majors Temurin
 tracks upstream — not every major has a Temurin build for every OS/arch
