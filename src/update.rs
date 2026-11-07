@@ -91,20 +91,29 @@ fn parse_release(j: &serde_json::Value) -> Option<Release> {
     })
 }
 
-/// Published, non-prerelease releases, newest first.
+/// Releases asked for per page: `{api}/repos/{repo}/releases?per_page=100&page={n}` (template 0x14c5f4878).
+pub const RELEASES_PER_PAGE: usize = 100;
+/// Most pages read (estimated; 1000 releases is far more than needed).
+pub const MAX_RELEASE_PAGES: u32 = 10;
+
+/// Published, non-prerelease releases, highest version first. Pages are read from 1 upward
+/// (the original counts the page up by one at 0x145fc1367) until one comes back short.
 fn releases(repo: &str, max_secs: Option<u32>) -> Res<Vec<Release>> {
-    let url = format!("{}/repos/{}/releases?per_page=30", api_url(), repo);
-    let text = http_get_with(&url, Some("GITHUB_TOKEN"), max_secs)?;
-    let j: serde_json::Value = serde_json::from_str(&text).map_err(|e| format!("failed to check for version: {}", e))?;
-    let mut out: Vec<Release> = j
-        .as_array()
-        .map(|a| {
-            a.iter()
+    let mut out: Vec<Release> = vec![];
+    for page in 1..=MAX_RELEASE_PAGES {
+        let url = format!("{}/repos/{}/releases?per_page={}&page={}", api_url(), repo, RELEASES_PER_PAGE, page);
+        let text = http_get_with(&url, Some("GITHUB_TOKEN"), max_secs)?;
+        let j: serde_json::Value = serde_json::from_str(&text).map_err(|e| format!("failed to check for version: {}", e))?;
+        let rows = j.as_array().cloned().unwrap_or_default();
+        out.extend(
+            rows.iter()
                 .filter(|r| !r["draft"].as_bool().unwrap_or(false) && !r["prerelease"].as_bool().unwrap_or(false))
-                .filter_map(parse_release)
-                .collect()
-        })
-        .unwrap_or_default();
+                .filter_map(parse_release),
+        );
+        if rows.len() < RELEASES_PER_PAGE {
+            break;
+        }
+    }
     out.sort_by(|a, b| version_cmp(&b.version, &a.version));
     Ok(out)
 }
@@ -116,21 +125,25 @@ fn release_by_version(repo: &str, version: &str) -> Res<Release> {
     parse_release(&j).ok_or_else(|| format!("release v{} has no tag", version))
 }
 
-/// The newest release old enough for `min_age`, and the newest one skipped for being younger.
+/// The highest version published at or before `now - min_age`, and the highest one skipped for
+/// being younger (FUN_1471f2430: keep rows whose time <= cutoff, sort, take the last). A release
+/// without a publish time is never eligible, as an index row without one is invalid there.
 fn eligible(list: &[Release], min_age: u64) -> (Option<&Release>, Option<&Release>) {
-    let now = now_secs();
+    let cutoff = now_secs().saturating_sub(min_age);
     let mut skipped = None;
     for r in list {
-        let age = r.published.map(|p| now.saturating_sub(p)).unwrap_or(u64::MAX);
-        if age >= min_age {
-            return (Some(r), skipped);
-        }
-        if skipped.is_none() {
-            skipped = Some(r);
+        match r.published {
+            Some(p) if p <= cutoff => return (Some(r), skipped),
+            Some(_) if skipped.is_none() => skipped = Some(r),
+            _ => {}
         }
     }
     (None, skipped)
 }
+
+/// The original's error when nothing is old enough (string 0x14c709f8f).
+pub const NO_ELIGIBLE_RELEASE: &str =
+    "no dev release satisfies minimum release age; lower self_update.minimum_release_age or specify a version";
 
 fn is_newer(latest: &str) -> bool {
     version_cmp(latest, VERSION) == std::cmp::Ordering::Greater
@@ -247,7 +260,7 @@ pub fn self_update(a: SelfUpdateArgs) -> Res<i32> {
                     ));
                 }
             }
-            pick.cloned().ok_or("failed to select eligible version: no release is old enough yet")?
+            pick.cloned().ok_or(NO_ELIGIBLE_RELEASE)?
         }
     };
     let _ = write_file(&state_file(), &serde_json::json!({ "checked": now_secs(), "latest": rel.version }).to_string());
@@ -351,6 +364,11 @@ mod tests {
         let (pick, skipped) = eligible(&list, 0);
         assert_eq!(pick.unwrap().version, "2026.11.6");
         assert!(skipped.is_none());
+        // No publish time: never eligible.
+        let undated = vec![Release { version: "2026.12.1".into(), url: String::new(), published: None, assets: vec![] }, rel("2026.11.4", 100)];
+        assert_eq!(eligible(&undated, 0).0.unwrap().version, "2026.11.4");
+        // Nothing old enough.
+        assert!(eligible(&[rel("2026.11.6", 1)], 24 * 3600).0.is_none());
     }
 
     #[test]

@@ -119,7 +119,12 @@ Windows also saves `JAVA_HOME` and java's `bin` in the user environment for cmd.
 | Confirmation | asks first; without `--yes` and no answer: "self-update cancelled; use --yes to update non-interactively" | string `0x14c5cff44` |
 | Release source | `self_update.api_url` (default `https://api.github.com`) + `self_update.repository` | settings schema |
 | Check timeout | 3 s | estimated |
-| Release API | `<api_url>/repos/<repo>/releases?per_page=30` (drafts and prereleases skipped), `…/releases/tags/v<VERSION>` | GitHub API |
+| Release list (GitHub source) | `{api_url}/repos/{repo}/releases?per_page=100&page={n}`, page counted up from 1 (`page + 1` at `0x145fc1367`); dev stops at a short page, at most 10 pages (estimated); drafts and prereleases skipped | template `0x14c5f4878` (`{}` `/repos/` `{}` `/releases?per_page=100&page=` `{}`) |
+| Release list (original's own source) | `https://mise.jdx.dev/releases.tsv` (33 bytes) when the original checks its own repository; not used by dev | `0x145fc0f34` |
+| Choosing the release | rows "version`\t`unix-seconds"; keep those published **at or before now − minimum age**, strip leading `v`, sort, take the **highest version**; a row without a time is invalid (dev: a release without `published_at` is never eligible) | `FUN_1471f2430` (Ghidra): split on `\n`, drop `\r`, two fields or "invalid mise release index row", `time <= cutoff`, sort, last |
+| Nothing old enough | "no mise release satisfies minimum release age; lower self_update.minimum_release_age or specify a version" (dev: "no dev release …") | string `0x14c709f8f`, used in `FUN_1471f2430` |
+| Named version | `{api_url}/repos/{repo}/releases/tags/v{VERSION}` | GitHub API |
+| Default repository | `jpsdm/dev` (the original's own default is `jdx/mise`) | person's request; settings schema `self_update.repository` |
 | Asset for this computer | `dev-<windows|linux|macos>-<x86_64|aarch64>[.exe]`, checked against `SHA256SUMS.txt` | release workflow |
 | Self-replace | running program renamed to `dev.exe.old` / `dev.old`, new one moved in | estimated |
 | Release version | `Cargo.toml` version; if tag `vX.Y.Z` exists, `X.Y.(last+1)` | release workflow |
