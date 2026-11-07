@@ -20,6 +20,8 @@ pub enum Backend {
     Pypi(String),
     /// `java`: JDKs from the vendors' own downloads, listed by the original's metadata service.
     Java,
+    /// `python`: prebuilt CPython from python-build-standalone.
+    Python,
     /// Known only through `dev link`.
     Local(String),
 }
@@ -46,6 +48,7 @@ impl Backend {
             "node" | "nodejs" | "core:node" => Backend::Node,
             "go" | "golang" | "core:go" => Backend::Go,
             "java" | "core:java" | "jdk" => Backend::Java,
+            "python" | "core:python" | "python3" => Backend::Python,
             // A few popular tools, mapped to their GitHub releases.
             "gh" => gh("cli", "cli"),
             "ripgrep" | "rg" => gh("BurntSushi", "ripgrep"),
@@ -74,6 +77,7 @@ impl Backend {
             Backend::Node => "core",
             Backend::Go => "core",
             Backend::Java => "core",
+            Backend::Python => "core",
             Backend::Github { .. } => "github",
             Backend::Npm(_) => "npm",
             Backend::Cargo(_) => "cargo",
@@ -197,6 +201,7 @@ pub fn remote_versions(tool: &str) -> Res<Vec<String>> {
         Backend::Cargo(krate) => cargo_versions(krate)?,
         Backend::Pypi(pkg) => pypi_versions(pkg)?,
         Backend::Java => java_releases()?.into_iter().map(|r| r.name).collect(),
+        Backend::Python => python_builds()?.into_iter().map(|b| b.version).collect(),
         Backend::Local(name) => {
             return err(format!(
                 "{} has no download source in dev; register an existing install with `dev link {}@VERSION <DIR>` or use github:OWNER/REPO",
@@ -316,6 +321,14 @@ pub fn install(tool: &str, version: &str, force: bool, verbose_out: bool) -> Res
             let f = format!("java-{}.{}", dir_name(version), rel.file_type);
             (rel.url, f)
         }
+        Backend::Python => {
+            let b = python_builds()?
+                .into_iter()
+                .find(|b| b.version == version)
+                .ok_or_else(|| format!("no precompiled python found for {} on {}", version, python_triple()))?;
+            checksum = python_checksum(&b);
+            (b.url(), b.file_name.clone())
+        }
         Backend::Github { owner, repo } => github_asset(owner, repo, version)?,
         Backend::Npm(_) | Backend::Cargo(_) | Backend::Pypi(_) => unreachable!(),
         Backend::Local(name) => {
@@ -363,6 +376,9 @@ pub fn install(tool: &str, version: &str, force: bool, verbose_out: bool) -> Res
     fs::create_dir_all(dest.parent().unwrap()).map_err(|e| e.to_string())?;
     fs::rename(&src, &dest).map_err(|e| format!("could not move install into place: {}", e))?;
     let _ = remove_path(&tmp);
+    if backend == Backend::Python {
+        python_after_install(&dest);
+    }
     write_file(&dest.join(".dev-complete"), &now_secs().to_string())?;
     remember_tool_name(tool);
     let _ = fs::remove_file(&dl);
@@ -584,6 +600,178 @@ pub fn java_releases() -> Res<Vec<JavaRelease>> {
     Ok(out.into_iter().filter(|(_, r)| seen.insert(r.name.clone())).map(|(_, r)| r).collect())
 }
 
+// ---------------------------------------------------------------------------
+// Python (precompiled CPython from python-build-standalone, like the original's core:python)
+// ---------------------------------------------------------------------------
+
+/// Where the builds are downloaded from (string in the original next to `cpython-`).
+pub const PYTHON_DOWNLOAD_BASE: &str = "https://github.com/astral-sh/python-build-standalone/releases/download";
+/// The list of build file names for one platform: `<host>/python-precompiled-<triple>.gz`
+/// (the original's versions host `https://mise-versions.jdx.dev/` + `python-precompiled-`).
+pub const PYTHON_LIST_BASE: &str = "https://mise-versions.jdx.dev/python-precompiled-";
+/// `python.precompiled_flavor` default (string `install_only_stripped` in the original).
+pub const PYTHON_DEFAULT_FLAVOR: &str = "install_only_stripped";
+
+fn env_or(name: &str, default: String) -> String {
+    std::env::var(name).ok().filter(|v| !v.trim().is_empty()).unwrap_or(default)
+}
+
+/// `<arch>-<os>`, e.g. x86_64-pc-windows-msvc, aarch64-apple-darwin, x86_64-unknown-linux-gnu.
+/// DEV_PYTHON_PRECOMPILED_ARCH / DEV_PYTHON_PRECOMPILED_OS change either part
+/// (the original's python.precompiled_arch / python.precompiled_os).
+pub fn python_triple() -> String {
+    let arch = env_or("DEV_PYTHON_PRECOMPILED_ARCH", cpu_arch().to_string());
+    let os = env_or(
+        "DEV_PYTHON_PRECOMPILED_OS",
+        match os_name() {
+            "windows" => "pc-windows-msvc".to_string(),
+            "macos" => "apple-darwin".to_string(),
+            _ => "unknown-linux-gnu".to_string(),
+        },
+    );
+    format!("{}-{}", arch, os)
+}
+
+/// DEV_PYTHON_PRECOMPILED_FLAVOR (the original's python.precompiled_flavor); unset by default.
+pub fn python_flavor() -> Option<String> {
+    std::env::var("DEV_PYTHON_PRECOMPILED_FLAVOR").ok().filter(|v| !v.trim().is_empty())
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct PythonBuild {
+    pub version: String,
+    pub tag: String,
+    pub flavor: String,
+    pub file_name: String,
+}
+
+impl PythonBuild {
+    pub fn url(&self) -> String {
+        format!("{}/{}/{}", PYTHON_DOWNLOAD_BASE, self.tag, self.file_name.replace('+', "%2B"))
+    }
+}
+
+/// Reads `cpython-<version>+<tag>-<triple>-<flavor>.tar.gz` for this triple; anything else is not ours.
+pub fn parse_python_build(line: &str, triple: &str) -> Option<PythonBuild> {
+    let name = line.trim();
+    let rest = name.strip_prefix("cpython-")?;
+    let (version, rest) = rest.split_once('+')?;
+    let (tag, rest) = rest.split_once('-')?;
+    let flavor = rest.strip_prefix(triple)?.strip_prefix('-')?.strip_suffix(".tar.gz")?;
+    if version.is_empty() || flavor.is_empty() || !tag.bytes().all(|b| b.is_ascii_digit() || b == b'T') {
+        return None;
+    }
+    Some(PythonBuild { version: version.to_string(), tag: tag.to_string(), flavor: flavor.to_string(), file_name: name.to_string() })
+}
+
+/// The original's preference among builds of one version (FUN_144173b20, Ghidra):
+/// free-threaded builds only when the chosen flavor asks for them; with no flavor set,
+/// install_only_stripped (0) before install_only (1) before anything else (2); with one set,
+/// builds ending in it (0) before the rest (1). Ties go to the newest build date.
+pub fn python_build_rank(b: &PythonBuild, flavor: Option<&str>) -> Option<u8> {
+    let wants_ft = flavor.map(|f| f.contains("freethreaded")).unwrap_or(false);
+    if b.flavor.contains("freethreaded") && !wants_ft {
+        return None;
+    }
+    Some(match flavor {
+        Some(f) if b.flavor.ends_with(f) => 0,
+        Some(_) => 1,
+        None if b.flavor == PYTHON_DEFAULT_FLAVOR => 0,
+        None if b.flavor == "install_only" => 1,
+        None => 2,
+    })
+}
+
+/// The best build of every Python version for this computer, newest version first.
+pub fn python_builds() -> Res<Vec<PythonBuild>> {
+    let triple = python_triple();
+    let flavor = python_flavor();
+    let cache = cache_dir().join("python").join(format!("precompiled-{}.txt", triple));
+    let text = match read_cache(&cache, REMOTE_CACHE) {
+        Some(t) => t,
+        None => {
+            let gz = cache_dir().join("python").join(format!("precompiled-{}.gz", triple));
+            download(&format!("{}{}.gz", PYTHON_LIST_BASE, triple), &gz)?;
+            let t = gunzip_text(&gz)?;
+            let _ = fs::remove_file(&gz);
+            let _ = write_file(&cache, &t);
+            t
+        }
+    };
+    let mut best: std::collections::BTreeMap<String, (u8, PythonBuild)> = std::collections::BTreeMap::new();
+    for b in text.lines().filter_map(|l| parse_python_build(l, &triple)) {
+        let rank = match python_build_rank(&b, flavor.as_deref()) {
+            Some(r) => r,
+            None => continue,
+        };
+        let better = match best.get(&b.version) {
+            None => true,
+            Some((r, old)) => rank < *r || (rank == *r && b.tag > old.tag),
+        };
+        if better {
+            best.insert(b.version.clone(), (rank, b));
+        }
+    }
+    if best.is_empty() {
+        return err(format!("no precompiled python found for {}", triple));
+    }
+    let mut out: Vec<PythonBuild> = best.into_values().map(|(_, b)| b).collect();
+    out.sort_by(|a, b| version_cmp(&b.version, &a.version));
+    Ok(out)
+}
+
+fn gunzip_text(p: &Path) -> Res<String> {
+    use std::io::Read;
+    let f = fs::File::open(p).map_err(|e| format!("{}: {}", p.display(), e))?;
+    let mut s = String::new();
+    flate2::read::GzDecoder::new(f)
+        .read_to_string(&mut s)
+        .map_err(|e| format!("could not read the python list: {}", e))?;
+    Ok(s)
+}
+
+/// sha256 of a build from its release's SHA256SUMS (None when the release has none).
+fn python_checksum(b: &PythonBuild) -> Option<String> {
+    let sums = http_get(&format!("{}/{}/SHA256SUMS", PYTHON_DOWNLOAD_BASE, b.tag), None).ok()?;
+    sums.lines().find_map(|l| {
+        let mut it = l.split_whitespace();
+        let h = it.next()?;
+        let f = it.next()?.trim_start_matches('*');
+        (f == b.file_name).then(|| h.to_string())
+    })
+}
+
+/// The pip launcher the original writes (FUN_1442c2420, 0x28 bytes).
+pub const PIP_CMD: &str = "@echo off\r\n\"%~dp0python.exe\" -m pip %*\r\n";
+
+/// What the original adds after unpacking: on Windows python3.exe (a hard link, copied when that
+/// fails), and pip.cmd + pip3.cmd next to python.exe only when Scripts\pip.exe is missing
+/// (FUN_1442c2420); elsewhere a `python` next to `python3` when the build has none.
+fn python_after_install(dest: &Path) {
+    if cfg!(windows) {
+        let py = dest.join("python.exe");
+        let py3 = dest.join("python3.exe");
+        if py.exists() && !py3.exists() && fs::hard_link(&py, &py3).is_err() {
+            let _ = fs::copy(&py, &py3);
+        }
+        if !dest.join("Scripts").join("pip.exe").exists() {
+            for name in ["pip.cmd", "pip3.cmd"] {
+                let _ = fs::write(dest.join(name), PIP_CMD);
+            }
+        }
+    } else {
+        let bin = dest.join("bin");
+        if bin.join("python3").exists() && !bin.join("python").exists() {
+            #[cfg(unix)]
+            let _ = std::os::unix::fs::symlink("python3", bin.join("python"));
+        }
+        if bin.join("pip3").exists() && !bin.join("pip").exists() {
+            #[cfg(unix)]
+            let _ = std::os::unix::fs::symlink("pip3", bin.join("pip"));
+        }
+    }
+}
+
 /// JAVA_HOME of an install: the folder itself, or Contents/Home in macOS JDK bundles.
 pub fn java_home(install: &Path) -> PathBuf {
     let root = real_path(install);
@@ -620,6 +808,12 @@ pub fn bin_dirs(tool: &str, path: &Path) -> Vec<PathBuf> {
         Backend::Node => out.push(root.join("bin")),
         Backend::Go => out.push(root.join("bin")),
         Backend::Java => out.push(java_home(&root).join("bin")),
+        // Windows builds keep python.exe at the top and pip & co. in Scripts\.
+        Backend::Python if cfg!(windows) => {
+            out.push(root.clone());
+            out.push(root.join("Scripts"));
+        }
+        Backend::Python => out.push(root.join("bin")),
         // npm on Windows puts its .cmd launchers in the prefix itself; elsewhere in prefix/bin.
         Backend::Npm(_) if cfg!(windows) => out.push(root.clone()),
         Backend::Npm(_) => out.push(root.join("bin")),
@@ -932,6 +1126,26 @@ mod package_tests {
         assert_eq!(Backend::of("cargo:ripgrep"), Backend::Cargo("ripgrep".into()));
         assert_eq!(Backend::of("pipx:black"), Backend::Pypi("black".into()));
         assert_eq!(Backend::of("pypi:ruff"), Backend::Pypi("ruff".into()));
+    }
+
+    #[test]
+    fn python_build_names() {
+        let t = "x86_64-pc-windows-msvc";
+        let b = parse_python_build("cpython-3.12.16+20261026-x86_64-pc-windows-msvc-install_only_stripped.tar.gz", t).unwrap();
+        assert_eq!((b.version.as_str(), b.tag.as_str(), b.flavor.as_str()), ("3.12.16", "20261026", "install_only_stripped"));
+        assert!(b.url().ends_with("/20261026/cpython-3.12.16%2B20261026-x86_64-pc-windows-msvc-install_only_stripped.tar.gz"));
+        // Other platforms and old .tar.zst builds are not ours.
+        assert!(parse_python_build("cpython-3.12.16+20261026-aarch64-pc-windows-msvc-install_only_stripped.tar.gz", t).is_none());
+        assert!(parse_python_build("cpython-3.7.7-x86_64-pc-windows-msvc-shared-pgo-20200418T2225.tar.zst", t).is_none());
+        // Ranking (FUN_144173b20).
+        let ft = parse_python_build("cpython-3.13.1+20241205-x86_64-pc-windows-msvc-freethreaded-install_only_stripped.tar.gz", t).unwrap();
+        let io = parse_python_build("cpython-3.13.1+20241205-x86_64-pc-windows-msvc-install_only.tar.gz", t).unwrap();
+        assert_eq!(python_build_rank(&ft, None), None);
+        assert_eq!(python_build_rank(&ft, Some("freethreaded-install_only_stripped")), Some(0));
+        assert_eq!(python_build_rank(&b, None), Some(0));
+        assert_eq!(python_build_rank(&io, None), Some(1));
+        assert_eq!(python_build_rank(&io, Some("install_only_stripped")), Some(1));
+        assert!(is_prerelease("3.15.0a1") && is_prerelease("3.14.0rc2") && !is_prerelease("3.12.16"));
     }
 
     #[test]

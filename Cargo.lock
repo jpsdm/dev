@@ -202,6 +202,7 @@ name = "dev"
 version = "2026.11.3"
 dependencies = [
  "clap",
+ "flate2",
  "font8x8",
  "ignore",
  "png",

@@ -35,6 +35,20 @@ On Linux and macOS: data `$XDG_DATA_HOME/dev` or `~/.local/share/dev`, config `~
 (same install-script template). The program itself goes to `%LOCALAPPDATA%\dev\bin` on Windows and
 `~/.local/bin` elsewhere (`DEV_INSTALL_DIR`) — estimated (new in dev).
 
+## Python
+
+| Rule | Value | Source |
+|---|---|---|
+| Build list | `https://mise-versions.jdx.dev/python-precompiled-<arch>-<os>.gz`: gzip, one file name per line | string `python-precompiled-` `0x14c48bb5e`; versions host `https://mise-versions.jdx.dev/` |
+| Platform | `<arch>-<os>`: `x86_64`/`aarch64` + `pc-windows-msvc` / `apple-darwin` / `unknown-linux-gnu`; `python.precompiled_arch`/`_os` override (dev: `DEV_PYTHON_PRECOMPILED_ARCH`/`_OS`) | strings `-unknown-linux` `-apple-darwin` `-pc-windows` (strings dump line 13410), settings schema |
+| File name | `cpython-<version>+<tag>-<arch>-<os>-<flavor>.tar.gz` | strings `cpython-`, `install_only.tar.gz` |
+| Download | `https://github.com/astral-sh/python-build-standalone/releases/download/<tag>/<file>` | string (strings dump line 1604) |
+| Choice per version | free-threaded builds only when the flavor asks; no flavor set: `install_only_stripped` (0) < `install_only` (1) < other (2); flavor set: ends with it (0) < other (1); then newest tag | `FUN_144173b20` (Ghidra): `"freethreaded"` `0x14c4f9f2d`, `"install_only_stripped"`, `"install_only"`, date tag parsed and negated |
+| Checksum | release `SHA256SUMS` (the original verifies GitHub attestations instead) | estimated |
+| Windows extras | `python3.exe` hard link to `python.exe` (copy when linking fails); `pip.cmd` and `pip3.cmd` = `@echo off\r\n"%~dp0python.exe" -m pip %*\r\n` written only when `Scripts\pip.exe` is missing | `FUN_1442c2420` (Ghidra); strings "python: hardlink … failed (…); copying executable" |
+| PATH | Windows: install folder and `Scripts\`; elsewhere `bin/` | estimated from the build layout |
+| Prereleases | `3.15.0a1`, `3.14.0b2`, `rc` are skipped for `latest` and prefixes | estimated |
+
 ## Tool and version as two words (`dev install java 21`)
 
 | Rule | Value | Source |

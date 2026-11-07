@@ -306,6 +306,7 @@ do dev), os itens sem uso há 30 dias perdem **apenas os arquivos que o `.gitign
 | `node` | nodejs.org (`lts` aceito) |
 | `go` | go.dev |
 | `java` | JDKs dos fornecedores (Temurin por padrão; `zulu-`, `corretto-`, `oracle-`, `microsoft-`, `graalvm-`...) |
+| `python` | CPython pré-compilado (python-build-standalone), com `pip` |
 | `github:dono/repo` | releases do GitHub (atalhos: `gh`, `ripgrep`/`rg`, `fd`, `bat`, `jq`, `just`, `deno`, `bun`, `uv`, `zig`, `fzf`, `yq`, `hugo`, `lazygit`, `starship`, `watchexec`, `terraform-ls`) |
 | `npm:pacote` | npm (precisa do Node: `dev use -g node@lts`) |
 | `cargo:crate` | crates.io (usa cargo-binstall se houver, senão `cargo install`; precisa do Rust) |
@@ -328,6 +329,23 @@ dev ls-remote java 21      # versões disponíveis
   coloca `%JAVA_HOME%\bin` no PATH do usuário. O cmd, o Explorer e as IDEs abertos depois já veem.
   Confira com `dev doctor`.
 - O download é conferido pelo SHA-256 informado pelo fornecedor.
+
+## Python
+
+```sh
+dev use python 3.12        # Python 3.12 mais novo nesta pasta
+dev use -g python@3.13     # para tudo
+dev ls-remote python 3.13  # versões disponíveis
+dev exec -- python -m venv .venv
+```
+
+- Baixa o CPython pronto do projeto python-build-standalone (o mesmo que o uv usa), conferido pelo
+  SHA-256 da release. Nada é compilado; funciona no Windows (x64/ARM), Linux e macOS.
+- Vêm `python`, `python3` e `pip` (no Windows também `pip.cmd`/`pip3.cmd` quando a build não traz
+  `Scripts\pip.exe`). Programas instalados com `pip install` ficam no PATH (`Scripts\` no Windows, `bin/` no resto).
+- Versões em teste (`3.15.0a1`, `rc`) só são usadas se você pedir a versão exata.
+- Opções: `DEV_PYTHON_PRECOMPILED_FLAVOR` (ex. `freethreaded-install_only_stripped` para o Python
+  sem GIL), `DEV_PYTHON_PRECOMPILED_ARCH`, `DEV_PYTHON_PRECOMPILED_OS` (ex. `unknown-linux-musl`).
 
 ## Arquivos de configuração
 
@@ -384,6 +402,7 @@ keep = [".env", ".env.*", "*.local.*", "*.local", ".idea", ".vscode"]
 | `DEV_WORKSPACE_AUTO_CLEAN=0\|1` | desliga/liga a limpeza automática |
 | `DEV_JAVA_SHORTHAND_VENDOR` | fornecedor para `java@21` (padrão `temurin`) |
 | `DEV_PIPX_UVX=0` | instala `pypi:` com pipx em vez de uv |
+| `DEV_PYTHON_PRECOMPILED_FLAVOR` / `_ARCH` / `_OS` | qual build do Python baixar |
 | `DEV_CARGO_BINSTALL=0` | não usa cargo-binstall |
 | `DEV_CARGO_BINSTALL_QUICKINSTALL=1` | deixa o cargo-binstall usar o cargo-quickinstall |
 | `DEV_NO_MODIFY_PATH=1` / `DEV_NO_SHELLS=1` | `dev setup` não mexe no PATH / nos terminais |

@@ -292,9 +292,15 @@ pub fn version_matches(version: &str, prefix: &str) -> bool {
 
 pub fn is_prerelease(v: &str) -> bool {
     let l = v.to_ascii_lowercase();
-    ["alpha", "beta", "rc", "pre", "nightly", "dev", "canary", "preview"]
+    if ["alpha", "beta", "rc", "pre", "nightly", "dev", "canary", "preview"]
         .iter()
         .any(|k| l.contains(k))
+    {
+        return true;
+    }
+    // Python-style 3.15.0a1 / 3.14.0b2: a digit, `a` or `b`, a digit.
+    let b = l.as_bytes();
+    (1..b.len().saturating_sub(1)).any(|i| (b[i] == b'a' || b[i] == b'b') && b[i - 1].is_ascii_digit() && b[i + 1].is_ascii_digit())
 }
 
 /// Fetches a URL with the system curl and returns its body as text.
