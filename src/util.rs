@@ -163,6 +163,28 @@ pub fn civil_from_days(z: i64) -> (i64, u32, u32) {
     (if m <= 2 { y + 1 } else { y }, m, d)
 }
 
+/// (year, month, day) → days since 1970-01-01 (inverse of `civil_from_days`).
+pub fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400;
+    let mp = if m > 2 { m - 3 } else { m + 9 } as i64;
+    let doy = (153 * mp + 2) / 5 + d as i64 - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
+}
+
+/// `2026-11-06T12:34:56Z` (GitHub's timestamps, UTC) → seconds since 1970.
+pub fn parse_utc_timestamp(s: &str) -> Option<u64> {
+    let s = s.trim();
+    let num = |a: usize, b: usize| s.get(a..b)?.parse::<i64>().ok();
+    let (y, mo, d) = (num(0, 4)?, num(5, 7)?, num(8, 10)?);
+    let (h, mi, se) = (num(11, 13).unwrap_or(0), num(14, 16).unwrap_or(0), num(17, 19).unwrap_or(0));
+    let days = days_from_civil(y, mo as u32, d as u32);
+    let t = days * 86_400 + h * 3600 + mi * 60 + se;
+    (t >= 0).then_some(t as u64)
+}
+
 pub fn date_of(secs: u64) -> String {
     let (y, m, d) = civil_from_days((secs / 86_400) as i64);
     format!("{:04}-{:02}-{:02}", y, m, d)

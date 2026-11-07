@@ -236,9 +236,19 @@ também remove uma cópia antiga em `%LOCALAPPDATA%\Programs\dev\bin`.
 
 O instalador do Windows (`dev-setup-*.exe`) é o próprio dev: aberto com esse nome, ele roda `dev setup`.
 
-#### `dev self-update`
+#### `dev self-update [VERSÃO]`
 Baixa a release mais nova do GitHub para o seu sistema, confere o SHA-256 e substitui o programa.
-`--check` só avisa se existe versão nova; `-f, --force` reinstala a última mesmo se for a mesma.
+Pede confirmação (use `-y` em scripts). Releases publicadas há menos de **24 h** são puladas por
+segurança, a não ser que você diga a versão (`dev self-update 2026.11.5`).
+
+| Opção | Efeito |
+|---|---|
+| `--check` | só avisa se existe versão nova |
+| `--minimum-release-age <IDADE>` | outra idade mínima (`7d`, `0` para nenhuma) |
+| `-f, --force` | reinstala mesmo se já estiver atualizado (ou se um gerenciador de pacotes instalou o dev) |
+
+Se o dev foi instalado por um gerenciador de pacotes (pastas do winget), o self-update fica desligado:
+atualize pelo mesmo gerenciador.
 
 #### `dev doctor` (atalho `dr`)
 Verifica a instalação: arquivos de configuração, ferramentas faltando, `git`/`curl`/`tar`, no Windows
@@ -378,7 +388,9 @@ keep = [".env", ".env.*", "*.local.*", "*.local", ".idea", ".vscode"]
 | `DEV_CARGO_BINSTALL_QUICKINSTALL=1` | deixa o cargo-binstall usar o cargo-quickinstall |
 | `DEV_NO_MODIFY_PATH=1` / `DEV_NO_SHELLS=1` | `dev setup` não mexe no PATH / nos terminais |
 | `DEV_REPO=dono/repo` | de onde vêm as atualizações (as releases já trazem o valor) |
-| `DEV_NO_UPDATE_CHECK=1` | desliga o aviso de versão nova |
+| `DEV_NO_UPDATE_CHECK=1` / `DEV_DISABLE_UPDATE_WARNING=1` | desliga o aviso de versão nova |
+| `DEV_MINIMUM_RELEASE_AGE=7d` | idade mínima das releases para o self-update (padrão 24h) |
+| `DEV_SELF_UPDATE_AVAILABLE=0\|1` | força desligar/ligar o self-update |
 | `GITHUB_TOKEN` / `GITLAB_TOKEN` | repositórios privados e mais limite na API |
 | `XDG_CONFIG_HOME` / `XDG_DATA_HOME` | respeitadas no Linux/macOS |
 
@@ -401,11 +413,23 @@ Uma vez por dia, ao rodar um comando, o dev consulta a última release (no máxi
 se estiver offline) e avisa:
 
 ```
-dev a new version is available: 2026.11.5 (you have 2026.11.4)
-dev update with: dev self-update
+dev WARN  dev version 2026.11.5 available
+dev WARN  To update, run dev self-update
 ```
 
-O aviso não aparece em scripts/CI (saída não é terminal ou `CI` definido) nem com `DEV_NO_UPDATE_CHECK=1`.
+Só conta releases com pelo menos 24 h. O aviso não aparece em scripts/CI (saída não é terminal ou
+`CI` definido). Para desligar: `dev settings set disable_update_warning true` ou
+`DEV_DISABLE_UPDATE_WARNING=1`.
+
+Configurações (em `[settings]` da config global):
+
+```toml
+[settings]
+disable_update_warning = false
+self_update.repository = "OWNER/REPO"         # de onde vêm as releases
+self_update.api_url = "https://api.github.com" # GitHub Enterprise: https://ghe.example.com/api/v3
+self_update.minimum_release_age = "24h"
+```
 
 ## Releases e CI/CD
 

@@ -227,15 +227,20 @@ enum Cmd {
         #[arg(long)]
         file: Option<PathBuf>,
     },
-    /// Update dev to the newest release from GitHub
+    /// Update dev to the newest release from GitHub (releases younger than 24h are skipped)
     #[command(name = "self-update")]
     SelfUpdate {
+        /// Install this release (skips the minimum release age), such as 2026.11.4
+        version: Option<String>,
         /// Only say whether a newer version exists
         #[arg(long)]
         check: bool,
-        /// Reinstall the latest release even if it isn't newer
+        /// Update even if already up to date (or if a package manager installed dev)
         #[arg(long, short)]
         force: bool,
+        /// Skip releases published more recently than this, such as 7d or 0 (default 24h)
+        #[arg(long, value_name = "AGE")]
+        minimum_release_age: Option<String>,
     },
     /// Install dev on this computer (PATH and bash/zsh/fish/PowerShell setup), or --uninstall
     #[command(name = "setup", visible_alias = "self-install")]
@@ -1062,7 +1067,14 @@ fn dispatch(cli: Cli) -> Res<i32> {
         }
         Cmd::Workspace(args) => workspace::run(args),
         Cmd::Setup(args) => setup::run(args),
-        Cmd::SelfUpdate { check, force } => update::self_update(check, force, quiet),
+        Cmd::SelfUpdate { version, check, force, minimum_release_age } => update::self_update(update::SelfUpdateArgs {
+            version,
+            check,
+            force,
+            yes: yes || std::env::var("DEV_YES").is_ok(),
+            minimum_release_age,
+            quiet,
+        }),
     }
 }
 

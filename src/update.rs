@@ -1,22 +1,60 @@
-//! New-version alert and `dev self-update`, from the project's GitHub releases.
-//!
-//! The repository comes from DEV_REPO (owner/name) at run time, or the one the release build was
-//! made from (the GitHub Actions workflow bakes `DEV_REPO` in). Without one, both stay quiet.
+//! New-version warning and `dev self-update`, from the project's GitHub releases.
+//! Rules follow the original's `src\cli\version.rs` / `src\cli\self_update.rs` (see MECHANICS.md).
 
 use crate::util::*;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// How often the automatic check may contact GitHub.
-pub const CHECK_INTERVAL_SECS: u64 = 24 * 3600;
-/// The automatic check gives up after this long so it never slows a command down much.
+/// How often the warning may contact GitHub: 0x15180 seconds, stored at 0x145fbfafe.
+pub const CHECK_INTERVAL_SECS: u64 = 86_400;
+/// The background check gives up after this long (estimated; keeps commands quick offline).
 pub const CHECK_TIMEOUT_SECS: u32 = 3;
+/// Releases younger than this are skipped unless a version is named (`self_update.minimum_release_age`, default 24h).
+pub const DEFAULT_MINIMUM_RELEASE_AGE: &str = "24h";
+/// `self_update.api_url` default.
+pub const DEFAULT_API_URL: &str = "https://api.github.com";
+/// Install folders of package managers that own the program (FUN_1434a3010):
+/// `{dir}/packages/` and `{dir}/links/` for each of these, matched on the lower-cased path with `/`.
+pub const PACKAGE_MANAGER_DIRS: &[&str] = &["microsoft/winget", "program files/winget"];
 
+fn global_setting(key: &str) -> Option<toml::Value> {
+    let path = global_config_path();
+    crate::config::ConfigFile::load(&path, true).ok()?.settings.get(key).cloned()
+}
+
+fn env_flag(k: &str) -> Option<bool> {
+    std::env::var(k).ok().map(|v| !(v.is_empty() || v == "0" || v.eq_ignore_ascii_case("false")))
+}
+
+/// `owner/name` the releases come from: DEV_REPO, `self_update.repository`, or the repository the
+/// release build was made from (baked in by the workflow).
 pub fn repo() -> Option<String> {
     std::env::var("DEV_REPO")
         .ok()
-        .filter(|r| !r.trim().is_empty())
-        .or_else(|| option_env!("DEV_REPO").map(String::from).filter(|r| !r.trim().is_empty()))
+        .or_else(|| global_setting("self_update.repository").and_then(|v| v.as_str().map(String::from)))
+        .or_else(|| option_env!("DEV_REPO").map(String::from))
+        .filter(|r| r.contains('/'))
+}
+
+fn api_url() -> String {
+    global_setting("self_update.api_url")
+        .and_then(|v| v.as_str().map(String::from))
+        .unwrap_or_else(|| DEFAULT_API_URL.into())
+        .trim_end_matches('/')
+        .to_string()
+}
+
+fn minimum_release_age(override_age: Option<&str>) -> Res<u64> {
+    let s = override_age
+        .map(String::from)
+        .or_else(|| std::env::var("DEV_MINIMUM_RELEASE_AGE").ok())
+        .or_else(|| global_setting("self_update.minimum_release_age").and_then(|v| v.as_str().map(String::from)))
+        .or_else(|| global_setting("minimum_release_age").and_then(|v| v.as_str().map(String::from)))
+        .unwrap_or_else(|| DEFAULT_MINIMUM_RELEASE_AGE.into());
+    if s.trim() == "0" {
+        return Ok(0);
+    }
+    parse_duration(&s).map_err(|_| format!("invalid self-update release age: {}", s))
 }
 
 /// The release file for this computer: dev-windows-x86_64.exe, dev-linux-aarch64, dev-macos-aarch64...
@@ -24,46 +62,118 @@ pub fn asset_name() -> String {
     format!("dev-{}-{}{}", os_name(), cpu_arch(), if cfg!(windows) { ".exe" } else { "" })
 }
 
+#[derive(Clone, Debug)]
 pub struct Release {
     pub version: String,
     pub url: String,
+    pub published: Option<u64>,
     pub assets: Vec<(String, String)>,
 }
 
-fn latest_release(repo: &str, max_secs: Option<u32>) -> Res<Release> {
-    let api = format!("https://api.github.com/repos/{}/releases/latest", repo);
-    let text = http_get_with(&api, Some("GITHUB_TOKEN"), max_secs)?;
-    let j: serde_json::Value = serde_json::from_str(&text).map_err(|e| format!("bad release data: {}", e))?;
-    let tag = j["tag_name"].as_str().ok_or("the latest release has no tag")?;
-    let assets = j["assets"]
+fn parse_release(j: &serde_json::Value) -> Option<Release> {
+    let tag = j["tag_name"].as_str()?;
+    Some(Release {
+        version: tag.trim_start_matches('v').to_string(),
+        url: j["html_url"].as_str().unwrap_or("").to_string(),
+        published: j["published_at"].as_str().and_then(parse_utc_timestamp),
+        assets: j["assets"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(|x| Some((x["name"].as_str()?.to_string(), x["browser_download_url"].as_str()?.to_string())))
+                    .collect()
+            })
+            .unwrap_or_default(),
+    })
+}
+
+/// Published, non-prerelease releases, newest first.
+fn releases(repo: &str, max_secs: Option<u32>) -> Res<Vec<Release>> {
+    let url = format!("{}/repos/{}/releases?per_page=30", api_url(), repo);
+    let text = http_get_with(&url, Some("GITHUB_TOKEN"), max_secs)?;
+    let j: serde_json::Value = serde_json::from_str(&text).map_err(|e| format!("failed to check for version: {}", e))?;
+    let mut out: Vec<Release> = j
         .as_array()
         .map(|a| {
             a.iter()
-                .filter_map(|x| Some((x["name"].as_str()?.to_string(), x["browser_download_url"].as_str()?.to_string())))
+                .filter(|r| !r["draft"].as_bool().unwrap_or(false) && !r["prerelease"].as_bool().unwrap_or(false))
+                .filter_map(parse_release)
                 .collect()
         })
         .unwrap_or_default();
-    Ok(Release {
-        version: tag.trim_start_matches('v').to_string(),
-        url: j["html_url"].as_str().unwrap_or("").to_string(),
-        assets,
-    })
+    out.sort_by(|a, b| version_cmp(&b.version, &a.version));
+    Ok(out)
+}
+
+fn release_by_version(repo: &str, version: &str) -> Res<Release> {
+    let url = format!("{}/repos/{}/releases/tags/v{}", api_url(), repo, version.trim_start_matches('v'));
+    let text = http_get(&url, Some("GITHUB_TOKEN")).map_err(|_| format!("no release v{} in {}", version.trim_start_matches('v'), repo))?;
+    let j: serde_json::Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+    parse_release(&j).ok_or_else(|| format!("release v{} has no tag", version))
+}
+
+/// The newest release old enough for `min_age`, and the newest one skipped for being younger.
+fn eligible(list: &[Release], min_age: u64) -> (Option<&Release>, Option<&Release>) {
+    let now = now_secs();
+    let mut skipped = None;
+    for r in list {
+        let age = r.published.map(|p| now.saturating_sub(p)).unwrap_or(u64::MAX);
+        if age >= min_age {
+            return (Some(r), skipped);
+        }
+        if skipped.is_none() {
+            skipped = Some(r);
+        }
+    }
+    (None, skipped)
 }
 
 fn is_newer(latest: &str) -> bool {
     version_cmp(latest, VERSION) == std::cmp::Ordering::Greater
 }
 
+/// Whether this copy may replace itself (FUN_1434a3700 / FUN_1434a3580 / FUN_1434a3010):
+/// DEV_SELF_UPDATE_AVAILABLE decides when set; otherwise not when the program sits in a package
+/// manager's folder (winget), checked on its path and on the path with links resolved.
+pub fn self_update_available() -> bool {
+    if let Some(v) = env_flag("DEV_SELF_UPDATE_AVAILABLE") {
+        return v;
+    }
+    let me = match std::env::current_exe() {
+        Ok(p) => p,
+        Err(_) => return false,
+    };
+    if managed_path(&me) {
+        return false;
+    }
+    match fs::canonicalize(&me) {
+        Ok(real) => !managed_path(&real),
+        Err(_) => true,
+    }
+}
+
+fn managed_path(p: &Path) -> bool {
+    let s = p.display().to_string().replace('\\', "/").to_lowercase();
+    PACKAGE_MANAGER_DIRS
+        .iter()
+        .any(|d| s.contains(&format!("{}/packages/", d)) || s.contains(&format!("{}/links/", d)))
+}
+
 fn state_file() -> PathBuf {
     state_dir().join("update-check.json")
 }
 
-/// After a command: once a day, look for a newer release and say so on stderr.
-/// Off with DEV_NO_UPDATE_CHECK=1, in CI, or when stderr isn't a terminal.
+fn warning_disabled() -> bool {
+    env_flag("DEV_NO_UPDATE_CHECK").unwrap_or(false)
+        || env_flag("DEV_DISABLE_UPDATE_WARNING").unwrap_or(false)
+        || global_setting("disable_update_warning").and_then(|v| v.as_bool()).unwrap_or(false)
+}
+
+/// After a command: at most once per 24 h, look for a newer eligible release and warn on stderr.
+/// Quiet with `disable_update_warning`, in CI, or when stderr isn't a terminal.
 pub fn maybe_notify() {
     use std::io::IsTerminal;
-    let off = |k: &str| std::env::var(k).map(|v| !v.is_empty() && v != "0" && v != "false").unwrap_or(false);
-    if off("DEV_NO_UPDATE_CHECK") || off("CI") || !std::io::stderr().is_terminal() {
+    if warning_disabled() || env_flag("CI").unwrap_or(false) || !std::io::stderr().is_terminal() {
         return;
     }
     let repo = match repo() {
@@ -74,37 +184,76 @@ pub fn maybe_notify() {
         .ok()
         .and_then(|t| serde_json::from_str(&t).ok())
         .unwrap_or_default();
-    let last = state["checked"].as_u64().unwrap_or(0);
-    if now_secs().saturating_sub(last) < CHECK_INTERVAL_SECS {
+    if now_secs().saturating_sub(state["checked"].as_u64().unwrap_or(0)) < CHECK_INTERVAL_SECS {
         return;
     }
     // Record the attempt first, so a slow or offline network costs at most one try a day.
     let mut latest = state["latest"].as_str().unwrap_or("").to_string();
-    if let Ok(r) = latest_release(&repo, Some(CHECK_TIMEOUT_SECS)) {
-        latest = r.version;
+    if let (Ok(list), Ok(age)) = (releases(&repo, Some(CHECK_TIMEOUT_SECS)), minimum_release_age(None)) {
+        if let (Some(r), _) = eligible(&list, age) {
+            latest = r.version.clone();
+        }
     }
     let _ = write_file(&state_file(), &serde_json::json!({ "checked": now_secs(), "latest": latest }).to_string());
     if !latest.is_empty() && is_newer(&latest) {
         eprintln!();
-        eprintln!("{} a new version is available: {} (you have {})", NAME, latest, VERSION);
-        eprintln!("{} update with: dev self-update", NAME);
+        warn(format!("dev version {} available", latest));
+        if self_update_available() {
+            warn("To update, run dev self-update");
+        } else {
+            warn("self-update is disabled for this install; update dev the same way you installed it");
+        }
     }
 }
 
-/// `dev self-update`: download the newest release for this computer and replace this program.
-pub fn self_update(check_only: bool, force: bool, quiet: bool) -> Res<i32> {
-    let repo = repo().ok_or("no release repository is known; set DEV_REPO=owner/name")?;
-    let rel = latest_release(&repo, None)?;
+pub struct SelfUpdateArgs {
+    pub version: Option<String>,
+    pub check: bool,
+    pub force: bool,
+    pub yes: bool,
+    pub minimum_release_age: Option<String>,
+    pub quiet: bool,
+}
+
+/// `dev self-update [VERSION]`: install the newest eligible release (or VERSION) for this computer.
+pub fn self_update(a: SelfUpdateArgs) -> Res<i32> {
+    if !self_update_available() && !a.force {
+        return err("self-update is disabled for this install; update dev the same way you installed it (or pass --force)");
+    }
+    let repo = repo().ok_or("no release repository is known; set DEV_REPO=owner/name or `dev settings set self_update.repository owner/name`")?;
+    let rel = match &a.version {
+        // A named version skips the minimum release age.
+        Some(v) => release_by_version(&repo, v)?,
+        None => {
+            let list = releases(&repo, None)?;
+            let age = minimum_release_age(a.minimum_release_age.as_deref())?;
+            let (pick, skipped) = eligible(&list, age);
+            if let Some(s) = skipped {
+                if is_newer(&s.version) && !a.quiet {
+                    let hours = s.published.map(|p| now_secs().saturating_sub(p) / 3600).unwrap_or(0);
+                    info(format!(
+                        "newer {} release {} ({} h old) ignored by minimum_release_age; pass it by name or use --minimum-release-age 0",
+                        repo, s.version, hours
+                    ));
+                }
+            }
+            pick.cloned().ok_or("failed to select eligible version: no release is old enough yet")?
+        }
+    };
     let _ = write_file(&state_file(), &serde_json::json!({ "checked": now_secs(), "latest": rel.version }).to_string());
-    if !is_newer(&rel.version) && !force {
-        if !quiet {
+    let newer = is_newer(&rel.version);
+    if a.version.is_none() && !newer && !a.force {
+        if !a.quiet {
             info(format!("dev {} is up to date (latest release: {})", VERSION, rel.version));
         }
         return Ok(0);
     }
-    if check_only {
+    if a.check {
         println!("{} → {}  {}", VERSION, rel.version, rel.url);
         return Ok(0);
+    }
+    if !a.yes && !confirm(&format!("Update dev {} → {}?", VERSION, rel.version), false) {
+        return err("self-update cancelled; use --yes to update non-interactively");
     }
     let name = asset_name();
     let url = rel
@@ -116,7 +265,7 @@ pub fn self_update(check_only: bool, force: bool, quiet: bool) -> Res<i32> {
     let me = std::env::current_exe().map_err(|e| e.to_string())?;
     let dir = me.parent().ok_or("cannot find dev's folder")?.to_path_buf();
     let tmp = dir.join(format!(".{}.download", name));
-    info(format!("downloading {} {}", rel.version, url));
+    info(format!("self-update downloading release {}", rel.version));
     download(&url, &tmp)?;
     if let Some((_, sums_url)) = rel.assets.iter().find(|(n, _)| n == "SHA256SUMS.txt") {
         let sums = http_get(sums_url, Some("GITHUB_TOKEN"))?;
@@ -165,6 +314,10 @@ fn replace_self(me: &Path, new: &Path) -> Res<()> {
 mod tests {
     use super::*;
 
+    fn rel(v: &str, hours_ago: u64) -> Release {
+        Release { version: v.into(), url: String::new(), published: Some(now_secs() - hours_ago * 3600), assets: vec![] }
+    }
+
     #[test]
     fn asset_names() {
         let n = asset_name();
@@ -177,5 +330,29 @@ mod tests {
         assert!(is_newer("9999.1.1"));
         assert!(!is_newer("2000.1.1"));
         assert!(!is_newer(VERSION));
+    }
+
+    #[test]
+    fn minimum_release_age_skips_young_releases() {
+        let list = vec![rel("2026.11.6", 2), rel("2026.11.5", 30), rel("2026.11.4", 100)];
+        let (pick, skipped) = eligible(&list, 24 * 3600);
+        assert_eq!(pick.unwrap().version, "2026.11.5");
+        assert_eq!(skipped.unwrap().version, "2026.11.6");
+        let (pick, skipped) = eligible(&list, 0);
+        assert_eq!(pick.unwrap().version, "2026.11.6");
+        assert!(skipped.is_none());
+    }
+
+    #[test]
+    fn package_manager_paths() {
+        assert!(managed_path(Path::new(r"C:\Users\me\AppData\Local\Microsoft\WinGet\Packages\dev\dev.exe")));
+        assert!(managed_path(Path::new(r"C:\Program Files\WinGet\Links\dev.exe")));
+        assert!(!managed_path(Path::new(r"C:\Users\me\AppData\Local\dev\bin\dev.exe")));
+    }
+
+    #[test]
+    fn timestamps() {
+        assert_eq!(parse_utc_timestamp("1970-01-02T00:00:00Z"), Some(86_400));
+        assert_eq!(parse_utc_timestamp("2026-11-06T09:47:45Z").map(date_of).as_deref(), Some("2026-11-06"));
     }
 }

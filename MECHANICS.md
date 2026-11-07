@@ -108,9 +108,18 @@ Windows also saves `JAVA_HOME` and java's `bin` in the user environment for cmd.
 
 | Rule | Value | Source |
 |---|---|---|
-| Update check | once per 24 h, after a command, only when stderr is a terminal and `CI`/`DEV_NO_UPDATE_CHECK` are unset | estimated |
+| Update check interval | **86 400 s (24 h)** | `mov qword [rdx], 0x15180` at `0x145fbfafe` in the warning function `0x145fbfa10` (`src\cli\version.rs`) |
+| Warning can be turned off | setting `disable_update_warning` (default false); dev also `DEV_DISABLE_UPDATE_WARNING`, `DEV_NO_UPDATE_CHECK` | settings schema; flag read at `0x145fbfac7` |
+| Warning text | `<name> version {} available` then `To update, run <name> self-update` (warn level) | templates `0x14c5f4730`, `0x14c5f476d`, used at `0x145fbfbaf`, `0x145fbfcb0` |
+| When self-update isn't allowed | the second line is replaced by "self-update is disabled for this install; update … the same way you installed it" | string `0x14b5f746f`; check `FUN_1434a3700` before the second line (`0x145fbfc2e`) |
+| Self-update allowed? | `FUN_1434a3700` (Ghidra): a cached override (`MISE_SELF_UPDATE_AVAILABLE`, dev: `DEV_SELF_UPDATE_AVAILABLE`) wins; otherwise not allowed when `FUN_1434a3580` finds the program in a package manager's folder | Ghidra |
+| Package manager folders | path with `\` → `/` (`FUN_1434a3010`, constants `0x14aa18d40`/`0x14aa18d50`), lower-cased, containing `{d}/packages/` or `{d}/links/` for `d` in `microsoft/winget`, `program files/winget`; checked on the path and the path with links resolved (`FUN_1434a3580`) | table `0x14b5fe340`, templates `0x14b5f7458`, `0x14b5f7465` |
+| Minimum release age | releases younger than **24 h** are skipped unless a version is named; `self_update.minimum_release_age`, then `minimum_release_age`, else 24h; `--minimum-release-age` | help text of `self-update`; message "newer {} release {} ignored by minimum_release_age" `0x14c5f46d8` |
+| Named version | `self-update VERSION` installs that release, skipping the age rule | help text of `self-update` |
+| Confirmation | asks first; without `--yes` and no answer: "self-update cancelled; use --yes to update non-interactively" | string `0x14c5cff44` |
+| Release source | `self_update.api_url` (default `https://api.github.com`) + `self_update.repository` | settings schema |
 | Check timeout | 3 s | estimated |
-| Release API | `https://api.github.com/repos/<DEV_REPO>/releases/latest` (`tag_name` without `v`) | GitHub API |
+| Release API | `<api_url>/repos/<repo>/releases?per_page=30` (drafts and prereleases skipped), `…/releases/tags/v<VERSION>` | GitHub API |
 | Asset for this computer | `dev-<windows|linux|macos>-<x86_64|aarch64>[.exe]`, checked against `SHA256SUMS.txt` | release workflow |
 | Self-replace | running program renamed to `dev.exe.old` / `dev.old`, new one moved in | estimated |
 | Release version | `Cargo.toml` version; if tag `vX.Y.Z` exists, `X.Y.(last+1)` | release workflow |
