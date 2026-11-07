@@ -1,0 +1,60 @@
+# Checks every pull request and every push to a branch other than main.
+# (A push or merge to main runs release.yml, which runs the same checks before releasing.)
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches-ignore: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: Test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --locked
+      - name: Unit tests
+        run: cargo test --locked
+      - name: Smoke test
+        shell: bash
+        run: |
+          set -e
+          bin=target/debug/dev
+          [ -f "$bin.exe" ] && bin="$bin.exe"
+          "$bin" --version
+          "$bin" --help > /dev/null
+          "$bin" activate bash > /dev/null
+          "$bin" activate zsh > /dev/null
+          "$bin" activate fish > /dev/null
+          "$bin" activate pwsh > /dev/null
+          "$bin" --screenshot shot.png
+          test -s shot.png
+
+  install-script:
+    name: install.sh
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Syntax (sh, bash, dash)
+        run: |
+          sh -n install.sh
+          bash -n install.sh
+          sudo apt-get install -y dash >/dev/null && dash -n install.sh
+      - name: shellcheck
+        run: shellcheck -s sh -S error install.sh scripts/build-release.sh

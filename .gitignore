@@ -1,0 +1,6 @@
+/target
+/dist
+/shots
+*.old
+*.download
+.DS_Store

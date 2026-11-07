@@ -1,0 +1,177 @@
+# CI/CD: every push (merge) to main is tested, built for Windows, Linux and macOS, and published
+# as a GitHub release with the installers and plain binaries.
+#
+# Version: the `version` in Cargo.toml. If that tag (vX.Y.Z) already exists, the last number
+# goes up by one (vX.Y.Z+1, ...), so every merge gets its own release. Raise the version in
+# Cargo.toml to start a new series.
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: Test (${{ matrix.os }})
+    strategy:
+      fail-fast: true
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --locked
+      - name: install.sh syntax
+        if: runner.os == 'Linux'
+        run: sh -n install.sh && bash -n install.sh && shellcheck -s sh -S error install.sh
+
+  version:
+    name: Pick the version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: v
+        shell: bash
+        run: |
+          set -euo pipefail
+          base=$(grep -m1 '^version *= *"' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')
+          git fetch --tags --force
+          if git rev-parse -q --verify "refs/tags/v$base" >/dev/null; then
+            prefix="${base%.*}"
+            last=$(git tag -l "v$prefix.*" | sed "s/^v$prefix\.//" | grep -E '^[0-9]+$' | sort -n | tail -1)
+            version="$prefix.$((last + 1))"
+          else
+            version="$base"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Releasing v$version (Cargo.toml says $base)" >> "$GITHUB_STEP_SUMMARY"
+
+  build:
+    name: Build ${{ matrix.name }}
+    needs: [test, version]
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - { name: windows-x86_64, os: windows-latest, target: x86_64-pc-windows-msvc, run: true }
+          - { name: windows-aarch64, os: windows-latest, target: aarch64-pc-windows-msvc, run: false }
+          - { name: linux-x86_64, os: ubuntu-latest, target: x86_64-unknown-linux-musl, run: true }
+          - { name: linux-aarch64, os: ubuntu-24.04-arm, target: aarch64-unknown-linux-musl, run: true }
+          - { name: macos-aarch64, os: macos-latest, target: aarch64-apple-darwin, run: true }
+          - { name: macos-x86_64, os: macos-latest, target: x86_64-apple-darwin, run: false }
+    runs-on: ${{ matrix.os }}
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      DEV_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - name: musl tools
+        if: contains(matrix.target, 'musl')
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - name: Set the version
+        shell: bash
+        run: |
+          perl -0pi -e 's/^version = "[^"]*"/version = "'"$VERSION"'"/m' Cargo.toml
+          echo "DEV_BUILD_DATE=$(date -u +%Y-%m-%d)" >> "$GITHUB_ENV"
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
+      - name: Check it runs
+        if: matrix.run
+        shell: bash
+        run: |
+          bin=target/${{ matrix.target }}/release/dev
+          [ -f "$bin.exe" ] && bin="$bin.exe"
+          "$bin" --version
+          "$bin" --version | grep -q "$VERSION"
+      - name: Package
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          dir=target/${{ matrix.target }}/release
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp "$dir/dev.exe" "out/dev-${{ matrix.name }}.exe"
+            # The installer is dev itself: named dev-setup*.exe it installs itself when opened.
+            cp "$dir/dev.exe" "out/dev-setup-${{ matrix.name }}.exe"
+          else
+            cp "$dir/dev" "out/dev-${{ matrix.name }}"
+            chmod +x "out/dev-${{ matrix.name }}"
+            tar -czf "out/dev-${{ matrix.name }}.tar.gz" -C "$dir" dev
+          fi
+          ls -l out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dev-${{ matrix.name }}
+          path: out/*
+          if-no-files-found: error
+
+  release:
+    name: Publish v${{ needs.version.outputs.version }}
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Installer script and checksums
+        run: |
+          set -euo pipefail
+          sed "s#__DEV_REPO__#${{ github.repository }}#" install.sh > dist/install.sh
+          cd dist
+          sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+      - name: Release notes
+        run: |
+          repo="${{ github.repository }}"
+          cat > notes.md <<EOF
+          ## Install dev v$VERSION
+
+          **Windows:** download \`dev-setup-windows-x86_64.exe\` and open it (no administrator needed).
+
+          **Linux / macOS:**
+
+          \`\`\`sh
+          curl -fsSL https://github.com/$repo/releases/download/v$VERSION/install.sh | sh
+          \`\`\`
+
+          **Already installed?** Run \`dev self-update\`.
+
+          **Plain programs (no installer):** \`dev-<system>-<processor>\` (\`.exe\` on Windows, \`.tar.gz\` also for Linux/macOS).
+          Check downloads against \`SHA256SUMS.txt\`.
+          EOF
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ env.VERSION }}
+          target_commitish: ${{ github.sha }}
+          name: dev v${{ env.VERSION }}
+          body_path: notes.md
+          generate_release_notes: true
+          make_latest: true
+          files: dist/*

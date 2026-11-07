@@ -1,0 +1,22 @@
+name: Feature request
+description: A new tool, command or option for dev
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What do you want to do?
+      description: The situation and what is hard about it today.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: How could dev help?
+      description: The command or setting you imagine, e.g. `dev use python@3.12`
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What do you do now instead?

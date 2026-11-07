@@ -1,0 +1,23 @@
+[package]
+name = "dev"
+version = "2026.11.3"
+edition = "2021"
+description = "dev: tool versions, environment, tasks and a workspace for your projects"
+
+[[bin]]
+name = "dev"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+toml_edit = "0.22"
+ignore = "0.4"
+png = "0.17"
+font8x8 = "0.3"
+sha2 = "0.10"
+
+[profile.release]
+opt-level = 3
