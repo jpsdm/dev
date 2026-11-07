@@ -3,6 +3,8 @@ name = "dev"
 version = "2026.11.3"
 edition = "2021"
 description = "dev: tool versions, environment, tasks and a workspace for your projects"
+repository = "https://github.com/jpsdm/dev"
+homepage = "https://github.com/jpsdm/dev"
 
 [[bin]]
 name = "dev"

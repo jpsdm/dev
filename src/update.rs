@@ -11,6 +11,8 @@ pub const CHECK_INTERVAL_SECS: u64 = 86_400;
 pub const CHECK_TIMEOUT_SECS: u32 = 3;
 /// Releases younger than this are skipped unless a version is named (`self_update.minimum_release_age`, default 24h).
 pub const DEFAULT_MINIMUM_RELEASE_AGE: &str = "24h";
+/// `self_update.repository` default: where dev's releases are published.
+pub const DEFAULT_REPO: &str = "jpsdm/dev";
 /// `self_update.api_url` default.
 pub const DEFAULT_API_URL: &str = "https://api.github.com";
 /// Install folders of package managers that own the program (FUN_1434a3010):
@@ -26,14 +28,16 @@ fn env_flag(k: &str) -> Option<bool> {
     std::env::var(k).ok().map(|v| !(v.is_empty() || v == "0" || v.eq_ignore_ascii_case("false")))
 }
 
-/// `owner/name` the releases come from: DEV_REPO, `self_update.repository`, or the repository the
-/// release build was made from (baked in by the workflow).
+/// `owner/name` the releases come from: DEV_REPO, `self_update.repository`, the repository the
+/// release build was made from (baked in by the workflow), else jpsdm/dev.
 pub fn repo() -> Option<String> {
     std::env::var("DEV_REPO")
         .ok()
+        .filter(|r| r.contains('/'))
         .or_else(|| global_setting("self_update.repository").and_then(|v| v.as_str().map(String::from)))
         .or_else(|| option_env!("DEV_REPO").map(String::from))
         .filter(|r| r.contains('/'))
+        .or_else(|| Some(DEFAULT_REPO.to_string()))
 }
 
 fn api_url() -> String {
@@ -226,6 +230,12 @@ pub fn self_update(a: SelfUpdateArgs) -> Res<i32> {
         Some(v) => release_by_version(&repo, v)?,
         None => {
             let list = releases(&repo, None)?;
+            if list.is_empty() {
+                if !a.quiet {
+                    info(format!("no dev releases published yet in https://github.com/{}/releases", repo));
+                }
+                return Ok(0);
+            }
             let age = minimum_release_age(a.minimum_release_age.as_deref())?;
             let (pick, skipped) = eligible(&list, age);
             if let Some(s) = skipped {

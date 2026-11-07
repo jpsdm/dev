@@ -1,7 +1,7 @@
 #!/bin/sh
 # dev installer for Linux and macOS.
 #
-#   curl -fsSL https://github.com/OWNER/REPO/releases/latest/download/install.sh | sh
+#   curl -fsSL https://github.com/jpsdm/dev/releases/latest/download/install.sh | sh
 #   sh install.sh                 install dev and set up bash, zsh, fish (and pwsh if present)
 #   sh install.sh --uninstall     remove it again (tools and settings stay; add --purge to drop them)
 #
@@ -9,7 +9,7 @@
 #   1. DEV_BINARY=/path/to/dev
 #   2. a `dev` program next to this script, or dist/dev-<os>-<arch>[.tar.gz] next to it
 #   3. DEV_DOWNLOAD_URL=https://host/path  ->  <url>/dev-<os>-<arch>.tar.gz
-#   4. the GitHub release of DEV_REPO (filled in by the release workflow); DEV_VERSION picks one
+#   4. the GitHub release of DEV_REPO (default jpsdm/dev); DEV_VERSION picks one
 #   5. this script's folder holds dev's source (Cargo.toml) and Rust is installed: build it
 #      (DEV_FROM_SOURCE=1 makes this the first choice)
 #
@@ -18,9 +18,8 @@
 
 set -eu
 
-# Replaced with owner/name by the release workflow (.github/workflows/release.yml).
-DEV_REPO="${DEV_REPO:-__DEV_REPO__}"
-case "$DEV_REPO" in __*__) DEV_REPO="" ;; esac
+# Where releases are downloaded from (owner/name on GitHub).
+DEV_REPO="${DEV_REPO:-jpsdm/dev}"
 
 say() { printf '%s\n' "dev-install: $*"; }
 die() { printf '%s\n' "dev-install: error: $*" >&2; exit 1; }
@@ -51,7 +50,7 @@ for a in "$@"; do
   case "$a" in
     --uninstall) UNINSTALL=1 ;;
     --purge) PURGE=1 ;;
-    -h | --help) sed -n '2,19p' "$0" 2>/dev/null || echo "see https://github.com/${DEV_REPO:-OWNER/REPO}#install"; exit 0 ;;
+    -h | --help) sed -n '2,19p' "$0" 2>/dev/null || echo "see https://github.com/${DEV_REPO:-jpsdm/dev}#install"; exit 0 ;;
     *) die "unknown option: $a" ;;
   esac
 done

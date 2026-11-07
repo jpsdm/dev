@@ -14,8 +14,8 @@ dev run test            # roda a tarefa "test" com as ferramentas certas no PATH
 dev workspace import github:usuario/projeto
 ```
 
-> Substitua `OWNER/REPO` neste documento pelo endereço do repositório no GitHub (por exemplo
-> `JPSDM/dev`). Os arquivos de release já saem com o endereço certo.
+> Repositório oficial: **https://github.com/jpsdm/dev** — releases, instaladores e issues ficam lá.
+> O `dev` procura atualizações nele por padrão (mude com `self_update.repository` ou `DEV_REPO`).
 
 ---
 
@@ -46,7 +46,7 @@ dev workspace import github:usuario/projeto
 
 ### Windows
 
-1. Baixe **`dev-setup-windows-x86_64.exe`** na [última release](https://github.com/OWNER/REPO/releases/latest)
+1. Baixe **`dev-setup-windows-x86_64.exe`** na [última release](https://github.com/jpsdm/dev/releases/latest)
    (`dev-setup-windows-aarch64.exe` em PCs ARM).
 2. Abra o arquivo. Não precisa de administrador: o dev é instalado em `%LOCALAPPDATA%\dev\bin`,
    essa pasta entra no PATH do seu usuário e o dev é ligado no PowerShell (7 e 5.1) e no Git Bash.
@@ -59,7 +59,7 @@ dev workspace import github:usuario/projeto
 ### Linux e macOS
 
 ```sh
-curl -fsSL https://github.com/OWNER/REPO/releases/latest/download/install.sh | sh
+curl -fsSL https://github.com/jpsdm/dev/releases/latest/download/install.sh | sh
 ```
 
 O script detecta o sistema e o processador, baixa o arquivo certo da release, confere o SHA-256,
@@ -387,7 +387,7 @@ keep = [".env", ".env.*", "*.local.*", "*.local", ".idea", ".vscode"]
 | `DEV_CARGO_BINSTALL=0` | não usa cargo-binstall |
 | `DEV_CARGO_BINSTALL_QUICKINSTALL=1` | deixa o cargo-binstall usar o cargo-quickinstall |
 | `DEV_NO_MODIFY_PATH=1` / `DEV_NO_SHELLS=1` | `dev setup` não mexe no PATH / nos terminais |
-| `DEV_REPO=dono/repo` | de onde vêm as atualizações (as releases já trazem o valor) |
+| `DEV_REPO=dono/repo` | de onde vêm as atualizações e o `install.sh` baixa o dev (padrão `jpsdm/dev`) |
 | `DEV_NO_UPDATE_CHECK=1` / `DEV_DISABLE_UPDATE_WARNING=1` | desliga o aviso de versão nova |
 | `DEV_MINIMUM_RELEASE_AGE=7d` | idade mínima das releases para o self-update (padrão 24h) |
 | `DEV_SELF_UPDATE_AVAILABLE=0\|1` | força desligar/ligar o self-update |
@@ -426,7 +426,7 @@ Configurações (em `[settings]` da config global):
 ```toml
 [settings]
 disable_update_warning = false
-self_update.repository = "OWNER/REPO"         # de onde vêm as releases
+self_update.repository = "jpsdm/dev"         # de onde vêm as releases
 self_update.api_url = "https://api.github.com" # GitHub Enterprise: https://ghe.example.com/api/v3
 self_update.minimum_release_age = "24h"
 ```
@@ -458,7 +458,7 @@ notarize os binários.
 
 ## Problemas, bugs e sugestões
 
-Abra uma [issue](https://github.com/OWNER/REPO/issues/new/choose) — há modelos prontos:
+Abra uma [issue](https://github.com/jpsdm/dev/issues/new/choose) — há modelos prontos:
 
 - **Bug:** inclua `dev version`, sistema, terminal, o comando exato, o que esperava, o que aconteceu
   (rode de novo com `--verbose`) e a saída de `dev doctor`. Tire tokens e senhas antes de colar.
