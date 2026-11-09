@@ -22,6 +22,8 @@ pub enum Backend {
     Java,
     /// `python`: prebuilt CPython from python-build-standalone.
     Python,
+    /// `maven`: Apache Maven binary distribution (Maven Central).
+    Maven,
     /// Known only through `dev link`.
     Local(String),
 }
@@ -49,6 +51,7 @@ impl Backend {
             "go" | "golang" | "core:go" => Backend::Go,
             "java" | "core:java" | "jdk" => Backend::Java,
             "python" | "core:python" | "python3" => Backend::Python,
+            "maven" | "mvn" | "apache-maven" => Backend::Maven,
             // A few popular tools, mapped to their GitHub releases.
             "gh" => gh("cli", "cli"),
             "ripgrep" | "rg" => gh("BurntSushi", "ripgrep"),
@@ -78,6 +81,7 @@ impl Backend {
             Backend::Go => "core",
             Backend::Java => "core",
             Backend::Python => "core",
+            Backend::Maven => "core",
             Backend::Github { .. } => "github",
             Backend::Npm(_) => "npm",
             Backend::Cargo(_) => "cargo",
@@ -202,6 +206,7 @@ pub fn remote_versions(tool: &str) -> Res<Vec<String>> {
         Backend::Pypi(pkg) => pypi_versions(pkg)?,
         Backend::Java => java_releases()?.into_iter().map(|r| r.name).collect(),
         Backend::Python => python_builds()?.into_iter().map(|b| b.version).collect(),
+        Backend::Maven => maven_versions()?,
         Backend::Local(name) => {
             return err(format!(
                 "{} has no download source in dev; register an existing install with `dev link {}@VERSION <DIR>` or use github:OWNER/REPO",
@@ -303,6 +308,8 @@ pub fn install(tool: &str, version: &str, force: bool, verbose_out: bool) -> Res
         return install_package(tool, version, &backend, &dest);
     }
     let mut checksum: Option<String> = None;
+    let mut sha512: Option<String> = None;
+    let mut sha1: Option<String> = None;
     let (url, file_name) = match &backend {
         Backend::Node => {
             let f = node_archive(version);
@@ -329,6 +336,15 @@ pub fn install(tool: &str, version: &str, force: bool, verbose_out: bool) -> Res
             checksum = python_checksum(&b);
             (b.url(), b.file_name.clone())
         }
+        Backend::Maven => {
+            let d = apache_download(&backend, version)?;
+            match fetch_hex(&d.checksum_url, d.checksum_len) {
+                Some(h) if d.checksum_len == 40 => sha1 = Some(h),
+                Some(h) => sha512 = Some(h),
+                None => warn(format!("{}@{}: no checksum at {}; downloading without one", tool, version, d.checksum_url)),
+            }
+            (d.url, d.file)
+        }
         Backend::Github { owner, repo } => github_asset(owner, repo, version)?,
         Backend::Npm(_) | Backend::Cargo(_) | Backend::Pypi(_) => unreachable!(),
         Backend::Local(name) => {
@@ -349,6 +365,26 @@ pub fn install(tool: &str, version: &str, force: bool, verbose_out: bool) -> Res
         }
         if verbose_out {
             info(format!("{}@{} checksum ok (sha256:{})", tool, version, got));
+        }
+    }
+    if let Some(want) = &sha512 {
+        let got = sha512_file(&dl)?;
+        if !got.eq_ignore_ascii_case(want) {
+            let _ = fs::remove_file(&dl);
+            return err(format!("checksum mismatch for {}: expected sha512 {}, got {}", file_name, want, got));
+        }
+        if verbose_out {
+            info(format!("{}@{} checksum ok (sha512)", tool, version));
+        }
+    }
+    if let Some(want) = &sha1 {
+        let got = sha1_file(&dl)?;
+        if !got.eq_ignore_ascii_case(want) {
+            let _ = fs::remove_file(&dl);
+            return err(format!("checksum mismatch for {}: expected sha1 {}, got {}", file_name, want, got));
+        }
+        if verbose_out {
+            info(format!("{}@{} checksum ok (sha1)", tool, version));
         }
     }
     let tmp = tool_dir(tool).join(format!(".tmp-{}", version));
@@ -601,6 +637,126 @@ pub fn java_releases() -> Res<Vec<JavaRelease>> {
 }
 
 // ---------------------------------------------------------------------------
+// Maven. The rules come from the original's embedded aqua registry record
+// `apache/maven` (0x14bed45d7); see MECHANICS.md.
+// ---------------------------------------------------------------------------
+
+pub const MAVEN_CENTRAL: &str = "https://repo.maven.apache.org/maven2/org/apache/maven/apache-maven";
+pub const APACHE_ARCHIVE: &str = "https://archive.apache.org/dist";
+/// Maven versions up to this one publish only a .sha1 (registry overrides `semver("<= 3.3.1")`).
+pub const MAVEN_LAST_SHA1: &str = "3.3.1";
+
+/// The registry's version filter for Maven: `not (Version matches "-(rc|alpha|beta)")`.
+pub fn maven_version_allowed(v: &str) -> bool {
+    !(v.contains("-rc") || v.contains("-alpha") || v.contains("-beta"))
+}
+
+/// zip on Windows, tar.gz elsewhere (both are published for every release).
+fn apache_ext() -> &'static str {
+    if cfg!(windows) {
+        "zip"
+    } else {
+        "tar.gz"
+    }
+}
+
+/// Every Maven version on Maven Central (3.x and newer), newest first.
+fn maven_versions() -> Res<Vec<String>> {
+    let xml = http_get(&format!("{}/maven-metadata.xml", MAVEN_CENTRAL), None)?;
+    Ok(xml
+        .split("<version>")
+        .skip(1)
+        .filter_map(|s| s.split("</version>").next())
+        .map(|v| v.trim().to_string())
+        .filter(|v| v.split('.').next().and_then(|m| m.parse::<u32>().ok()).map(|m| m >= 3).unwrap_or(false))
+        .filter(|v| maven_version_allowed(v))
+        .collect())
+}
+
+#[derive(Debug)]
+pub struct ApacheDownload {
+    pub url: String,
+    pub file: String,
+    pub checksum_url: String,
+    /// 40 (sha1) or 128 (sha512) hex characters, as the registry's `^(\b[A-Fa-f0-9]{N}\b)`.
+    pub checksum_len: usize,
+}
+
+/// Where the registry downloads Maven from:
+/// `https://archive.apache.org/dist/maven/maven-{major}/{v}/binaries/apache-maven-{v}-bin.{fmt}`.
+pub fn apache_download(backend: &Backend, version: &str) -> Res<ApacheDownload> {
+    let ext = apache_ext();
+    match backend {
+        Backend::Maven => {
+            let file = format!("apache-maven-{}-bin.{}", version, ext);
+            let major = version.split('.').next().unwrap_or("3");
+            let url = format!("{}/maven/maven-{}/{}/binaries/{}", APACHE_ARCHIVE, major, version, file);
+            let old = version_cmp(version, MAVEN_LAST_SHA1) != std::cmp::Ordering::Greater;
+            let (suffix, len) = if old { ("sha1", 40) } else { ("sha512", 128) };
+            Ok(ApacheDownload { checksum_url: format!("{}.{}", url, suffix), checksum_len: len, url, file })
+        }
+        _ => err(format!("no Apache download for {:?}", backend)),
+    }
+}
+
+/// A checksum file's hash: the first run of exactly `len` hex characters.
+fn fetch_hex(url: &str, len: usize) -> Option<String> {
+    let text = http_get(url, None).ok()?;
+    text.split(|c: char| !c.is_ascii_hexdigit())
+        .find(|w| w.len() == len)
+        .map(|w| w.to_ascii_lowercase())
+}
+
+pub fn sha1_file(p: &Path) -> Res<String> {
+    use sha1::{Digest, Sha1};
+    use std::io::Read;
+    let mut f = fs::File::open(p).map_err(|e| format!("{}: {}", p.display(), e))?;
+    let mut h = Sha1::new();
+    let mut buf = vec![0u8; 1 << 16];
+    loop {
+        let n = f.read(&mut buf).map_err(|e| e.to_string())?;
+        if n == 0 {
+            break;
+        }
+        h.update(&buf[..n]);
+    }
+    Ok(h.finalize().iter().map(|b| format!("{:02x}", b)).collect())
+}
+
+pub fn sha512_file(p: &Path) -> Res<String> {
+    use sha2::{Digest, Sha512};
+    use std::io::Read;
+    let mut f = fs::File::open(p).map_err(|e| format!("{}: {}", p.display(), e))?;
+    let mut h = Sha512::new();
+    let mut buf = vec![0u8; 1 << 16];
+    loop {
+        let n = f.read(&mut buf).map_err(|e| e.to_string())?;
+        if n == 0 {
+            break;
+        }
+        h.update(&buf[..n]);
+    }
+    Ok(h.finalize().iter().map(|b| format!("{:02x}", b)).collect())
+}
+
+/// The `<NAME>_HOME` variable a tool sets: JAVA_HOME, MAVEN_HOME.
+pub fn home_var(tool: &str) -> Option<&'static str> {
+    match Backend::of(tool) {
+        Backend::Java => Some("JAVA_HOME"),
+        Backend::Maven => Some("MAVEN_HOME"),
+        _ => None,
+    }
+}
+
+/// The folder that `<NAME>_HOME` points to for an install.
+pub fn home_dir(tool: &str, install: &Path) -> PathBuf {
+    match Backend::of(tool) {
+        Backend::Java => java_home(install),
+        _ => real_path(install),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Python (precompiled CPython from python-build-standalone, like the original's core:python)
 // ---------------------------------------------------------------------------
 
@@ -814,6 +970,7 @@ pub fn bin_dirs(tool: &str, path: &Path) -> Vec<PathBuf> {
             out.push(root.join("Scripts"));
         }
         Backend::Python => out.push(root.join("bin")),
+        Backend::Maven => out.push(root.join("bin")),
         // npm on Windows puts its .cmd launchers in the prefix itself; elsewhere in prefix/bin.
         Backend::Npm(_) if cfg!(windows) => out.push(root.clone()),
         Backend::Npm(_) => out.push(root.join("bin")),
@@ -1146,6 +1303,17 @@ mod package_tests {
         assert_eq!(python_build_rank(&io, None), Some(1));
         assert_eq!(python_build_rank(&io, Some("install_only_stripped")), Some(1));
         assert!(is_prerelease("3.15.0a1") && is_prerelease("3.14.0rc2") && !is_prerelease("3.12.16"));
+    }
+
+    #[test]
+    fn maven_rules() {
+        assert!(maven_version_allowed("3.9.11") && !maven_version_allowed("4.0.0-rc-7") && !maven_version_allowed("4.0.0-alpha-13"));
+        let m = apache_download(&Backend::Maven, "3.9.11").unwrap();
+        assert!(m.url.starts_with("https://archive.apache.org/dist/maven/maven-3/3.9.11/binaries/apache-maven-3.9.11-bin."));
+        assert_eq!((m.checksum_len, m.checksum_url.ends_with(".sha512")), (128, true));
+        let old = apache_download(&Backend::Maven, "3.3.1").unwrap();
+        assert_eq!((old.checksum_len, old.checksum_url.ends_with(".sha1")), (40, true));
+        assert!(apache_download(&Backend::Maven, "4.0.0").unwrap().url.contains("/maven-4/4.0.0/"));
     }
 
     #[test]

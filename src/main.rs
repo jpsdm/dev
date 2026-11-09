@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use util::*;
 
 pub const COMMAND_SUMMARY: &[(&str, &str)] = &[
-    ("use", "Install a tool (node, java...) and add it to dev.toml"),
+    ("use", "Install a tool (node, java, maven...) and add it to dev.toml"),
     ("install", "Install the tools in your config"),
     ("ls", "List installed and active tool versions"),
     ("exec", "Run a command with the tools on PATH"),
@@ -464,6 +464,50 @@ fn print_version(json: bool) {
     }
 }
 
+/// Windows: puts JAVA_HOME / MAVEN_HOME (and `%VAR%\bin` on PATH) in the user's
+/// environment variables, so cmd.exe, Explorer and IDEs see them. `always` (the global version)
+/// replaces what is there; otherwise it is only filled in when Windows has none, or when the saved
+/// folder no longer exists, so a project's version never overrides your global choice.
+fn save_home_var(tool: &str, version: &str, always: bool, quiet: bool) {
+    if !cfg!(windows) {
+        return;
+    }
+    let var = match tools::home_var(tool) {
+        Some(v) => v,
+        None => return,
+    };
+    let home = tools::home_dir(tool, &tools::install_path(tool, version));
+    let cur = setup::windows_user_var(var).filter(|c| !c.trim().is_empty());
+    let cur_exists = cur.as_deref().map(|c| Path::new(c).is_dir()).unwrap_or(false);
+    if !should_save_home(always, cur.is_some(), cur_exists) {
+        if let Some(c) = cur {
+            if !quiet && !same_path(Path::new(&c), &home) {
+                info(format!("{} in Windows stays {} (run `dev use -g {}@{}` to switch it)", var, c, tool, version));
+            }
+        }
+        return;
+    }
+    match setup::windows_set_global_home(tool, var, &home) {
+        Ok(()) => {
+            if !quiet {
+                info(format!(
+                    "{}={} saved in your user environment variables (with {} on PATH); open a new terminal",
+                    var,
+                    home.display(),
+                    setup::home_path_entry(var)
+                ));
+            }
+        }
+        Err(e) => warn(format!("could not save {} in the user environment: {}", var, e)),
+    }
+}
+
+/// Save the user variable? Always for the global version; otherwise only when Windows has none,
+/// or the saved folder is gone.
+fn should_save_home(always: bool, has_current: bool, current_exists: bool) -> bool {
+    always || !has_current || !current_exists
+}
+
 fn same_path(a: &Path, b: &Path) -> bool {
     match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
         (Ok(x), Ok(y)) => x == y,
@@ -726,6 +770,10 @@ fn dispatch(cli: Cli) -> Res<i32> {
                     }
                 };
                 if tools::is_installed(&t, &v) && !force {
+                    // Already there: still make sure Windows has its JAVA_HOME / MAVEN_HOME.
+                    if !dry_run {
+                        save_home_var(&t, &v, false, quiet);
+                    }
                     continue;
                 }
                 did += 1;
@@ -738,6 +786,7 @@ fn dispatch(cli: Cli) -> Res<i32> {
                         if !quiet {
                             info(format!("{}@{} ✓ installed", t, v));
                         }
+                        save_home_var(&t, &v, false, quiet);
                     }
                     Err(e) => {
                         eprintln!("{} ERROR {}@{}: {}", NAME, t, v, e);
@@ -998,29 +1047,17 @@ fn dispatch(cli: Cli) -> Res<i32> {
                 if !quiet {
                     info(format!("{} tools: {}@{}", display_path(&target), t, v));
                 }
-                if tools::Backend::of(&t) == tools::Backend::Java {
-                    let home = tools::java_home(&tools::install_path(&t, &v));
+                // JAVA_HOME / MAVEN_HOME.
+                if let Some(var) = tools::home_var(&t) {
+                    let home = tools::home_dir(&t, &tools::install_path(&t, &v));
                     if !quiet {
-                        info(format!("JAVA_HOME={}", home.display()));
+                        info(format!("{}={}", var, home.display()));
                     }
-                    // The global Java (`-g`, or `dev use` run where the global config is the target)
-                    // is saved in the Windows user environment, so cmd.exe, Explorer and IDEs get it.
+                    // The global one (`-g`, or `dev use` run where the global config is the target)
+                    // always replaces the Windows user variable; a project's only fills it when
+                    // Windows has none yet (or a stale one).
                     let is_global = global || same_path(&target, &global_config_path());
-                    if is_global && cfg!(windows) {
-                        match setup::windows_set_global_java(&home) {
-                            Ok(()) => {
-                                if !quiet {
-                                    info(format!(
-                                        "JAVA_HOME saved in your user environment variables (with {} on PATH); open a new terminal",
-                                        setup::JAVA_PATH_ENTRY
-                                    ));
-                                }
-                            }
-                            Err(e) => warn(format!("could not save JAVA_HOME in the user environment: {}", e)),
-                        }
-                    } else if !quiet && cfg!(windows) {
-                        info("JAVA_HOME applies in this folder (terminals with dev turned on); use -g to save it for all of Windows");
-                    }
+                    save_home_var(&t, &v, is_global, quiet);
                 }
             }
             let _ = yes;
@@ -1542,8 +1579,15 @@ fn doctor() -> Res<i32> {
     println!();
     if cfg!(windows) {
         println!("windows_user_environment:");
-        let java = setup::windows_user_var("JAVA_HOME");
-        println!("  JAVA_HOME: {}", java.as_deref().unwrap_or("(not set)"));
+        for (tool, var) in [("java", "JAVA_HOME"), ("maven", "MAVEN_HOME")] {
+            let v = setup::windows_user_var(var).filter(|s| !s.trim().is_empty());
+            println!("  {}: {}", var, v.as_deref().unwrap_or("(not set)"));
+            let installed = !tools::installed_versions(tool).is_empty();
+            let ok = v.as_deref().map(|p| Path::new(p).is_dir()).unwrap_or(false);
+            if installed && !ok {
+                problems.push(format!("{} is installed but {} is not set in Windows; run `dev use -g {}`", tool, var, tool));
+            }
+        }
         let path = setup::windows_user_var("Path").unwrap_or_default();
         let dev_on_path = path.split(';').any(|p| p.trim_end_matches('\\').eq_ignore_ascii_case(&self_bin_dir().display().to_string()));
         println!("  dev on PATH: {}", if dev_on_path { "yes" } else { "no" });
@@ -1595,6 +1639,14 @@ mod tests {
         assert_eq!(join_versions(s(&["go", "v1.22"])), s(&["go", "v1.22"]));
         assert!(is_numeric_version("21") && is_numeric_version("1.22.3"));
         assert!(!is_numeric_version("21.") && !is_numeric_version("v1") && !is_numeric_version(""));
+    }
+
+    #[test]
+    fn home_variable_rule() {
+        assert!(should_save_home(true, true, true)); // dev use -g: always
+        assert!(should_save_home(false, false, false)); // nothing saved yet: fill it in
+        assert!(should_save_home(false, true, false)); // saved folder is gone: replace
+        assert!(!should_save_home(false, true, true)); // project/install never overrides a working one
     }
 
     #[test]

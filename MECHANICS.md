@@ -35,6 +35,26 @@ On Linux and macOS: data `$XDG_DATA_HOME/dev` or `~/.local/share/dev`, config `~
 (same install-script template). The program itself goes to `%LOCALAPPDATA%\dev\bin` on Windows and
 `~/.local/bin` elsewhere (`DEV_INSTALL_DIR`) — estimated (new in dev).
 
+## Maven
+
+The original has no Maven code of its own and no `MAVEN_HOME`/keystore handling, but
+its **built-in registry** maps `maven` → `aqua:apache/maven` (then `asdf:mise-plugins/mise-maven`,
+`vfox:jdx/vfox-maven`; string `0x14b63a850`), and
+its **embedded aqua registry** carries the download record (read from the binary's data):
+
+| Rule | Value | Source |
+|---|---|---|
+| Maven download | `https://archive.apache.org/dist/maven/maven-{major}/{version}/binaries/apache-maven-{version}-bin.{format}` | aqua record `apache/maven` at `0x14bed45d7` (9 045 bytes, table entry `0x14c46bc68`) |
+| Maven version filter | `not (Version matches "-(rc|alpha|beta)")` | same record |
+| Maven checksum | `.sha1` (`^(\b[A-Fa-f0-9]{40}\b)`) for versions `<= 3.2.5` and `<= 3.3.1`; `.sha512` (`{128}`) after | same record, version overrides `0x14bed4b45`, `0x14bed5080`, `0x14bed5151` |
+| Maven program | `apache-maven-{v}/bin/mvn`; Windows `mvn.bat` (`<= 3.2.5`) / `mvn.cmd` | same record |
+| Maven check | `mvn --version` → `Apache Maven {{version}}` | registry test `0x14b63aa88` |
+| Archive format | zip on Windows, tar.gz elsewhere | estimated: the record's format field is stored in a form these tools can't print |
+| Maven version list | Maven Central `maven-metadata.xml` (3.x+) with the filter above | estimated (the record's version source isn't readable) |
+| Home variable | `MAVEN_HOME` = install folder, set like `JAVA_HOME` (prompt hook, exec/run) | person's request (not in the original) |
+| Windows user environment (JAVA/MAVEN_HOME + `%VAR%\bin`) | global version (`use -g`, or `use` writing the global config): always written; `install` (also when already installed) and project `use`: written only when the variable is missing or its folder no longer exists | person's report (round 8) |
+| PATH | `<install>/bin` | record's `bin/mvn` |
+
 ## Python
 
 | Rule | Value | Source |

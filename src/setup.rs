@@ -445,20 +445,25 @@ pub fn windows_user_path_remove(dir: &Path) -> Res<bool> {
     Ok(true)
 }
 
-pub const JAVA_PATH_ENTRY: &str = r"%JAVA_HOME%\bin";
+/// The user PATH entry for a `<NAME>_HOME` variable: `%JAVA_HOME%\bin`, `%MAVEN_HOME%\bin`...
+pub fn home_path_entry(var: &str) -> String {
+    format!(r"%{}%\bin", var)
+}
 
-/// For the global Java (`dev use -g java@21`, or `dev use` writing the global config):
-/// user variable JAVA_HOME plus `%JAVA_HOME%\bin` on the user PATH, so every new Windows
-/// terminal (cmd.exe and IDEs included) gets it. Older dev Java folders on PATH are removed.
-pub fn windows_set_global_java(java_home: &Path) -> Res<()> {
-    winenv::set("JAVA_HOME", &java_home.display().to_string())?;
-    let java_root = crate::tools::tool_dir("java").display().to_string().to_lowercase();
+/// For a global Java or Maven (`dev use -g`, or `dev use` writing the global config): the
+/// user variable (JAVA_HOME, MAVEN_HOME) plus `%VAR%\bin` once on the user PATH, so
+/// every new Windows terminal (cmd.exe and IDEs included) gets it. Folders of older dev versions
+/// of the same tool on PATH are removed.
+pub fn windows_set_global_home(tool: &str, var: &str, home: &Path) -> Res<()> {
+    winenv::set(var, &home.display().to_string())?;
+    let entry = home_path_entry(var);
+    let tool_root = crate::tools::tool_dir(tool).display().to_string().to_lowercase();
     let mut entries: Vec<String> = user_path_entries()?
         .into_iter()
-        .filter(|e| !e.to_lowercase().starts_with(&java_root) && !e.eq_ignore_ascii_case(JAVA_PATH_ENTRY))
+        .filter(|e| !e.to_lowercase().starts_with(&tool_root) && !e.eq_ignore_ascii_case(&entry))
         .collect();
     let at = entries.iter().position(|e| same_dir(e, &self_bin_dir())).map(|i| i + 1).unwrap_or(0);
-    entries.insert(at, JAVA_PATH_ENTRY.to_string());
+    entries.insert(at, entry);
     set_user_path(&entries)
 }
 

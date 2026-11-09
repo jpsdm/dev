@@ -70,12 +70,14 @@ pub fn env_vars(cfg: &Config, active: &[Active]) -> (Vec<(String, String)>, Vec<
                 let root = tools::real_path(&tools::install_path(&a.tool, &a.version));
                 vars.push(("GOROOT".into(), root.display().to_string()));
             }
-            // JAVA_HOME = the active JDK's install folder (0x143ef69f3 in the original).
-            tools::Backend::Java => {
-                let home = tools::java_home(&tools::install_path(&a.tool, &a.version));
-                vars.push(("JAVA_HOME".into(), home.display().to_string()));
+            // JAVA_HOME = the active JDK's install folder (0x143ef69f3 in the original);
+            // MAVEN_HOME the same way for Maven (new in dev).
+            _ => {
+                if let Some(var) = tools::home_var(&a.tool) {
+                    let home = tools::home_dir(&a.tool, &tools::install_path(&a.tool, &a.version));
+                    vars.push((var.into(), home.display().to_string()));
+                }
             }
-            _ => {}
         }
     }
     (vars, paths)
