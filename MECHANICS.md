@@ -60,6 +60,19 @@ its **embedded aqua registry** carries both download records (read from the bina
 | Windows user environment (JAVA/MAVEN/ANT_HOME + `%VAR%\bin`) | global version (`use -g`, or `use` writing the global config): always written; `install` (also when already installed) and project `use`: written only when the variable is missing or its folder no longer exists | person's report (round 8) |
 | PATH | `<install>/bin` | records' `bin/mvn`, `bin/ant` |
 
+## Certificates (`dev add cacert`, new in dev)
+
+| Rule | Value | Source |
+|---|---|---|
+| Input | a file, or every `.crt`, `.cer`, `.pem`, `.der` in a folder (not recursive) | person's request |
+| Javas | comma/space list of installed versions as prefixes (`8,11,17`, `zulu-17`), or `--all` | person's request |
+| Stored in | `<dev data>/certs` (`%LOCALAPPDATA%\dev\certs`); PEM bundles split into `certs/.parts/<name>-<n>.pem` | person's request |
+| Trust store | `<JAVA_HOME>/lib/security/cacerts` (9+), `<JAVA_HOME>/jre/lib/security/cacerts` (8) | JDK layout |
+| Tool | the JDK's own `keytool -importcert -noprompt -trustcacerts -alias … -file … -keystore … -storepass …` | JDK |
+| Password | `changeit` (`DEV_CACERTS_PASSWORD`) | JDK default |
+| Alias | `dev-<file name>` (lower-case, other characters → `-`), `-<n>` per bundle part; existing alias deleted and re-imported | estimated |
+| New Javas | get every stored certificate right after install (`DEV_JAVA_AUTO_CACERTS=0` turns it off) | estimated |
+
 ## Python
 
 | Rule | Value | Source |

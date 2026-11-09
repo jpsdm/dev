@@ -1,6 +1,7 @@
 //! dev — manages dev tools, environment variables and tasks, plus a workspace for projects,
 //! scratch folders and imported GitHub/GitLab repositories.
 
+mod certs;
 mod config;
 mod runtime;
 mod screenshot;
@@ -18,6 +19,7 @@ use util::*;
 
 pub const COMMAND_SUMMARY: &[(&str, &str)] = &[
     ("use", "Install a tool (node, java, maven...) and add it to dev.toml"),
+    ("add cacert", "Add certificates to installed Javas"),
     ("install", "Install the tools in your config"),
     ("ls", "List installed and active tool versions"),
     ("exec", "Run a command with the tools on PATH"),
@@ -70,6 +72,11 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Cmd {
+    /// Add things to installed tools, such as certificates to Java (`dev add cacert`)
+    Add {
+        #[command(subcommand)]
+        what: AddCmd,
+    },
     /// Print the shell code that turns dev on in every prompt
     Activate {
         /// pwsh, powershell, bash, zsh or fish (defaults to $SHELL, else pwsh on Windows)
@@ -340,6 +347,26 @@ enum Cmd {
     /// Workspace: projects, scratch folders, GitHub/GitLab imports and automatic cleanup
     #[command(visible_alias = "ws")]
     Workspace(workspace::WsArgs),
+}
+
+#[derive(Subcommand, Debug)]
+enum AddCmd {
+    /// Add a certificate (or a folder of .crt/.cer/.pem files) to the cacerts of installed Javas.
+    /// Saved in dev's certs folder; Javas installed later get them too.
+    #[command(after_help = "Examples:\n  dev add cacert C:/certs 8,11,17\n  dev add cacert ./corp-root.crt 21\n  dev add cacert C:/certs --all\n  dev add cacert --list")]
+    Cacert {
+        /// A certificate file or a folder with certificates
+        #[arg(required_unless_present = "list")]
+        path: Option<PathBuf>,
+        /// Installed Java versions, such as 8,11,17 (prefixes; zulu-17 for other vendors)
+        versions: Vec<String>,
+        /// Every installed Java
+        #[arg(long, short)]
+        all: bool,
+        /// Show the certificates already saved
+        #[arg(long, short)]
+        list: bool,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -1104,6 +1131,16 @@ fn dispatch(cli: Cli) -> Res<i32> {
         }
         Cmd::Workspace(args) => workspace::run(args),
         Cmd::Setup(args) => setup::run(args),
+        Cmd::Add { what: AddCmd::Cacert { path, versions, all, list } } => {
+            if list {
+                return certs::list();
+            }
+            let path = path.ok_or("give a certificate file or folder")?;
+            if !all && versions.is_empty() {
+                return err("say which Java versions, such as `dev add cacert C:/certs 8,11,17`, or use --all");
+            }
+            certs::add_cacert(&path, &versions, all, quiet)
+        }
         Cmd::SelfUpdate { version, check, force, minimum_release_age } => update::self_update(update::SelfUpdateArgs {
             version,
             check,

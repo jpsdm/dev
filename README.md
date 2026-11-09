@@ -25,13 +25,13 @@ dev workspace import github:usuario/projeto
 - [Primeiros passos](#primeiros-passos)
 - [Como funciona](#como-funciona)
 - [Comandos](#comandos)
-  - [Ferramentas](#ferramentas): `use`, `install`, `ls`, `ls-remote`, `latest`, `current`, `where`, `which`, `uninstall`, `unuse`, `upgrade`, `outdated`, `prune`, `link`
+  - [Ferramentas](#ferramentas): `use`, `install`, `ls`, `ls-remote`, `latest`, `current`, `where`, `which`, `uninstall`, `unuse`, `upgrade`, `outdated`, `prune`, `link`, `add cacert`
   - [Execução e ambiente](#execução-e-ambiente): `exec`, `run`, `tasks`, `env`, `set`, `unset`, `bin-paths`
   - [Terminal e instalação do dev](#terminal-e-instalação-do-dev): `activate`, `setup`, `self-update`, `doctor`, `version`
   - [Configuração](#configuração-de-arquivos): `edit`, `config`, `settings`, `cache`
   - [Workspace](#workspace): `workspace init|status|ls|new|scratch|promote|import|sync|path|rm|pin|unpin|clean|auto-clean`
 - [Ferramentas suportadas](#ferramentas-suportadas)
-- [Java e JAVA_HOME](#java-e-java_home) · [Maven e Ant](#maven-e-ant) · [Python](#python)
+- [Java e JAVA_HOME](#java-e-java_home) · [Maven e Ant](#maven-e-ant) · [Certificados no Java](#certificados-no-java-dev-add-cacert) · [Python](#python)
 - [Arquivos de configuração](#arquivos-de-configuração)
 - [Variáveis de ambiente](#variáveis-de-ambiente)
 - [Pastas usadas](#pastas-usadas)
@@ -182,6 +182,11 @@ Apaga versões que nenhuma configuração conhecida usa (`-n` só mostra).
 
 #### `dev link <FERRAMENTA@VERSÃO> <PASTA>` (atalho `ln`)
 Registra uma instalação que já existe no computador. `dev link java@corp C:\jdks\jdk-21`. `-f` substitui.
+
+#### `dev add cacert <ARQUIVO|PASTA> <VERSÕES>|--all`
+Adiciona certificados (`.crt`, `.cer`, `.pem`, `.der`) ao `cacerts` dos Javas instalados:
+`dev add cacert C:/certs 8,11,17`. `-a, --all` em todos; `-l, --list` mostra os guardados.
+Detalhes em [Certificados no Java](#certificados-no-java-dev-add-cacert).
 
 ### Execução e ambiente
 
@@ -351,6 +356,28 @@ dev exec -- mvn -v
   - `dev doctor` avisa quando a ferramenta está instalada e a variável não.
 - Os dois precisam de um Java: use `dev use java 21` junto.
 
+## Certificados no Java (`dev add cacert`)
+
+Para redes de empresa com proxy ou certificados próprios: adiciona certificados ao `cacerts` dos
+Javas já instalados pelo dev.
+
+```sh
+dev add cacert C:/certs 8,11,17       # uma pasta com .crt/.cer/.pem, nos Javas 8, 11 e 17
+dev add cacert ./raiz-empresa.crt 21  # um arquivo só
+dev add cacert C:/certs --all         # em todos os Javas instalados
+dev add cacert --list                 # o que já foi guardado
+```
+
+- As versões são prefixos: `8` pega o Java 8 instalado, `21` o 21; de outros fornecedores use o
+  nome completo (`zulu-17`). Separe com vírgula (ou espaço).
+- Os certificados são copiados para a pasta **`certs`** do dev (`%LOCALAPPDATA%\dev\certs` no
+  Windows, `~/.local/share/dev/certs` no Linux/macOS). **Todo Java instalado depois recebe esses
+  certificados automaticamente** (desligue com `DEV_JAVA_AUTO_CACERTS=0`).
+- Cada certificado entra com o apelido `dev-<nome-do-arquivo>`; rodar de novo substitui, não
+  duplica. Arquivos com vários certificados (bundle PEM) são separados (`dev-<nome>-1`, `-2`...).
+- Usa o `keytool` do próprio Java e a senha padrão `changeit` (mude com `DEV_CACERTS_PASSWORD`).
+  Funciona com Java 8 (`jre/lib/security/cacerts`) e 9+ (`lib/security/cacerts`).
+
 ## Python
 
 ```sh
@@ -424,6 +451,8 @@ keep = [".env", ".env.*", "*.local.*", "*.local", ".idea", ".vscode"]
 | `DEV_JAVA_SHORTHAND_VENDOR` | fornecedor para `java@21` (padrão `temurin`) |
 | `DEV_PIPX_UVX=0` | instala `pypi:` com pipx em vez de uv |
 | `DEV_PYTHON_PRECOMPILED_FLAVOR` / `_ARCH` / `_OS` | qual build do Python baixar |
+| `DEV_JAVA_AUTO_CACERTS=0` | Javas novos não recebem os certificados da pasta `certs` |
+| `DEV_CACERTS_PASSWORD` | senha do `cacerts` (padrão `changeit`) |
 | `DEV_CARGO_BINSTALL=0` | não usa cargo-binstall |
 | `DEV_CARGO_BINSTALL_QUICKINSTALL=1` | deixa o cargo-binstall usar o cargo-quickinstall |
 | `DEV_NO_MODIFY_PATH=1` / `DEV_NO_SHELLS=1` | `dev setup` não mexe no PATH / nos terminais |

@@ -421,6 +421,10 @@ pub fn install(tool: &str, version: &str, force: bool, verbose_out: bool) -> Res
     }
     write_file(&dest.join(".dev-complete"), &now_secs().to_string())?;
     remember_tool_name(tool);
+    // A new JDK gets the certificates already added with `dev add cacert`.
+    if backend == Backend::Java {
+        crate::certs::auto_apply(&java_home(&dest), version);
+    }
     let _ = fs::remove_file(&dl);
     Ok(dest)
 }
