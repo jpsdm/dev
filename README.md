@@ -31,7 +31,7 @@ dev workspace import github:usuario/projeto
   - [Configuração](#configuração-de-arquivos): `edit`, `config`, `settings`, `cache`
   - [Workspace](#workspace): `workspace init|status|ls|new|scratch|promote|import|sync|path|rm|pin|unpin|clean|auto-clean`
 - [Ferramentas suportadas](#ferramentas-suportadas)
-- [Java e JAVA_HOME](#java-e-java_home) · [Maven](#maven) · [Python](#python)
+- [Java e JAVA_HOME](#java-e-java_home) · [Maven e Ant](#maven-e-ant) · [Python](#python)
 - [Arquivos de configuração](#arquivos-de-configuração)
 - [Variáveis de ambiente](#variáveis-de-ambiente)
 - [Pastas usadas](#pastas-usadas)
@@ -308,6 +308,7 @@ do dev), os itens sem uso há 30 dias perdem **apenas os arquivos que o `.gitign
 | `java` | JDKs dos fornecedores (Temurin por padrão; `zulu-`, `corretto-`, `oracle-`, `microsoft-`, `graalvm-`...) |
 | `python` | CPython pré-compilado (python-build-standalone), com `pip` |
 | `maven` (ou `mvn`) | Apache Maven (Maven Central), define `MAVEN_HOME` |
+| `ant` | Apache Ant (archive.apache.org), define `ANT_HOME` |
 | `github:dono/repo` | releases do GitHub (atalhos: `gh`, `ripgrep`/`rg`, `fd`, `bat`, `jq`, `just`, `deno`, `bun`, `uv`, `zig`, `fzf`, `yq`, `hugo`, `lazygit`, `starship`, `watchexec`, `terraform-ls`) |
 | `npm:pacote` | npm (precisa do Node: `dev use -g node@lts`) |
 | `cargo:crate` | crates.io (usa cargo-binstall se houver, senão `cargo install`; precisa do Rust) |
@@ -331,23 +332,24 @@ dev ls-remote java 21      # versões disponíveis
   Confira com `dev doctor`.
 - O download é conferido pelo SHA-256 informado pelo fornecedor.
 
-## Maven
+## Maven e Ant
 
 ```sh
 dev use maven 3.9          # Maven 3.9 mais novo nesta pasta (MAVEN_HOME definido)
+dev use ant                # Ant mais novo (ANT_HOME definido)
 dev use -g maven@3.9       # para tudo
 dev exec -- mvn -v
 ```
 
 - Downloads oficiais da Apache (Maven Central e archive.apache.org), conferidos pelo `.sha512`.
-- `MAVEN_HOME` funciona como o `JAVA_HOME`: valem na pasta (terminais com o dev
+- `MAVEN_HOME` e `ANT_HOME` funcionam como o `JAVA_HOME`: valem na pasta (terminais com o dev
   ligado, `dev exec`, `dev run`) e, no Windows, são gravados nas **variáveis de ambiente do
-  usuário** com `%MAVEN_HOME%\bin` no PATH:
+  usuário** com `%MAVEN_HOME%\bin` / `%ANT_HOME%\bin` no PATH:
   - `dev use -g maven` (ou `dev use` na sua pasta de usuário) sempre grava/troca;
   - `dev install maven` e `dev use maven` num projeto gravam quando o Windows ainda não tem a
     variável (ou ela aponta para uma pasta que não existe mais) — nunca trocam a sua escolha global.
   - `dev doctor` avisa quando a ferramenta está instalada e a variável não.
-- Precisa de um Java: use `dev use java 21` junto.
+- Os dois precisam de um Java: use `dev use java 21` junto.
 
 ## Python
 
@@ -432,7 +434,7 @@ keep = [".env", ".env.*", "*.local.*", "*.local", ".idea", ".vscode"]
 | `GITHUB_TOKEN` / `GITLAB_TOKEN` | repositórios privados e mais limite na API |
 | `XDG_CONFIG_HOME` / `XDG_DATA_HOME` | respeitadas no Linux/macOS |
 
-Variáveis que o dev define: `PATH`, `JAVA_HOME`, `MAVEN_HOME`, `GOROOT`, as de `[env]`, e internas
+Variáveis que o dev define: `PATH`, `JAVA_HOME`, `MAVEN_HOME`, `ANT_HOME`, `GOROOT`, as de `[env]`, e internas
 (`__DEV_ORIG_PATH`, `__DEV_VARS`, `__DEV_SAVED_*`) usadas para desfazer ao sair da pasta.
 
 ## Pastas usadas

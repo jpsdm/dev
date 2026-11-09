@@ -450,8 +450,8 @@ pub fn home_path_entry(var: &str) -> String {
     format!(r"%{}%\bin", var)
 }
 
-/// For a global Java or Maven (`dev use -g`, or `dev use` writing the global config): the
-/// user variable (JAVA_HOME, MAVEN_HOME) plus `%VAR%\bin` once on the user PATH, so
+/// For a global Java, Maven or Ant (`dev use -g`, or `dev use` writing the global config): the
+/// user variable (JAVA_HOME, MAVEN_HOME, ANT_HOME) plus `%VAR%\bin` once on the user PATH, so
 /// every new Windows terminal (cmd.exe and IDEs included) gets it. Folders of older dev versions
 /// of the same tool on PATH are removed.
 pub fn windows_set_global_home(tool: &str, var: &str, home: &Path) -> Res<()> {

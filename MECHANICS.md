@@ -35,12 +35,12 @@ On Linux and macOS: data `$XDG_DATA_HOME/dev` or `~/.local/share/dev`, config `~
 (same install-script template). The program itself goes to `%LOCALAPPDATA%\dev\bin` on Windows and
 `~/.local/bin` elsewhere (`DEV_INSTALL_DIR`) — estimated (new in dev).
 
-## Maven
+## Maven and Ant
 
-The original has no Maven code of its own and no `MAVEN_HOME`/keystore handling, but
+The original has no Maven/Ant code of its own and no `MAVEN_HOME`/`ANT_HOME`/keystore handling, but
 its **built-in registry** maps `maven` → `aqua:apache/maven` (then `asdf:mise-plugins/mise-maven`,
-`vfox:jdx/vfox-maven`; string `0x14b63a850`), and
-its **embedded aqua registry** carries the download record (read from the binary's data):
+`vfox:jdx/vfox-maven`; string `0x14b63a850`) and `ant` → `vfox:jdx/vfox-ant` (`0x14b603ec0`), and
+its **embedded aqua registry** carries both download records (read from the binary's data):
 
 | Rule | Value | Source |
 |---|---|---|
@@ -49,11 +49,16 @@ its **embedded aqua registry** carries the download record (read from the binary
 | Maven checksum | `.sha1` (`^(\b[A-Fa-f0-9]{40}\b)`) for versions `<= 3.2.5` and `<= 3.3.1`; `.sha512` (`{128}`) after | same record, version overrides `0x14bed4b45`, `0x14bed5080`, `0x14bed5151` |
 | Maven program | `apache-maven-{v}/bin/mvn`; Windows `mvn.bat` (`<= 3.2.5`) / `mvn.cmd` | same record |
 | Maven check | `mvn --version` → `Apache Maven {{version}}` | registry test `0x14b63aa88` |
+| Ant download | `https://archive.apache.org/dist/ant/binaries/apache-ant-{version}-bin.{format}` + `.sha512` (`{128}`) | aqua record `apache/ant` at `0x14c3ccf3c` (`0x14c3cd0b2`) |
+| Ant versions | GitHub tags (`github_tag`); `semver("<= 1.10.0")` → error "Please use 1.10.1 or later" | same record |
+| Ant program | `apache-ant-{v}/bin/ant`; Windows `ant.bat` | same record |
+| Ant check | `ant -version` → `Apache Ant(TM) version {{version}}` | registry test `0x14b603fb0` |
 | Archive format | zip on Windows, tar.gz elsewhere | estimated: the record's format field is stored in a form these tools can't print |
 | Maven version list | Maven Central `maven-metadata.xml` (3.x+) with the filter above | estimated (the record's version source isn't readable) |
-| Home variable | `MAVEN_HOME` = install folder, set like `JAVA_HOME` (prompt hook, exec/run) | person's request (not in the original) |
-| Windows user environment (JAVA/MAVEN_HOME + `%VAR%\bin`) | global version (`use -g`, or `use` writing the global config): always written; `install` (also when already installed) and project `use`: written only when the variable is missing or its folder no longer exists | person's report (round 8) |
-| PATH | `<install>/bin` | record's `bin/mvn` |
+| Ant version list | listing of `https://archive.apache.org/dist/ant/binaries/` | estimated (dev reads the archive instead of GitHub tags) |
+| Home variables | `MAVEN_HOME`, `ANT_HOME` = install folder, set like `JAVA_HOME` (prompt hook, exec/run) | person's request (not in the original) |
+| Windows user environment (JAVA/MAVEN/ANT_HOME + `%VAR%\bin`) | global version (`use -g`, or `use` writing the global config): always written; `install` (also when already installed) and project `use`: written only when the variable is missing or its folder no longer exists | person's report (round 8) |
+| PATH | `<install>/bin` | records' `bin/mvn`, `bin/ant` |
 
 ## Python
 

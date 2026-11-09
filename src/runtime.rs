@@ -71,7 +71,7 @@ pub fn env_vars(cfg: &Config, active: &[Active]) -> (Vec<(String, String)>, Vec<
                 vars.push(("GOROOT".into(), root.display().to_string()));
             }
             // JAVA_HOME = the active JDK's install folder (0x143ef69f3 in the original);
-            // MAVEN_HOME the same way for Maven (new in dev).
+            // MAVEN_HOME / ANT_HOME the same way for Maven and Ant (new in dev).
             _ => {
                 if let Some(var) = tools::home_var(&a.tool) {
                     let home = tools::home_dir(&a.tool, &tools::install_path(&a.tool, &a.version));

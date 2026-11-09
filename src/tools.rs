@@ -24,6 +24,8 @@ pub enum Backend {
     Python,
     /// `maven`: Apache Maven binary distribution (Maven Central).
     Maven,
+    /// `ant`: Apache Ant binary distribution (archive.apache.org).
+    Ant,
     /// Known only through `dev link`.
     Local(String),
 }
@@ -52,6 +54,7 @@ impl Backend {
             "java" | "core:java" | "jdk" => Backend::Java,
             "python" | "core:python" | "python3" => Backend::Python,
             "maven" | "mvn" | "apache-maven" => Backend::Maven,
+            "ant" | "apache-ant" => Backend::Ant,
             // A few popular tools, mapped to their GitHub releases.
             "gh" => gh("cli", "cli"),
             "ripgrep" | "rg" => gh("BurntSushi", "ripgrep"),
@@ -81,7 +84,7 @@ impl Backend {
             Backend::Go => "core",
             Backend::Java => "core",
             Backend::Python => "core",
-            Backend::Maven => "core",
+            Backend::Maven | Backend::Ant => "core",
             Backend::Github { .. } => "github",
             Backend::Npm(_) => "npm",
             Backend::Cargo(_) => "cargo",
@@ -207,6 +210,7 @@ pub fn remote_versions(tool: &str) -> Res<Vec<String>> {
         Backend::Java => java_releases()?.into_iter().map(|r| r.name).collect(),
         Backend::Python => python_builds()?.into_iter().map(|b| b.version).collect(),
         Backend::Maven => maven_versions()?,
+        Backend::Ant => ant_versions()?,
         Backend::Local(name) => {
             return err(format!(
                 "{} has no download source in dev; register an existing install with `dev link {}@VERSION <DIR>` or use github:OWNER/REPO",
@@ -336,7 +340,7 @@ pub fn install(tool: &str, version: &str, force: bool, verbose_out: bool) -> Res
             checksum = python_checksum(&b);
             (b.url(), b.file_name.clone())
         }
-        Backend::Maven => {
+        Backend::Maven | Backend::Ant => {
             let d = apache_download(&backend, version)?;
             match fetch_hex(&d.checksum_url, d.checksum_len) {
                 Some(h) if d.checksum_len == 40 => sha1 = Some(h),
@@ -637,14 +641,17 @@ pub fn java_releases() -> Res<Vec<JavaRelease>> {
 }
 
 // ---------------------------------------------------------------------------
-// Maven. The rules come from the original's embedded aqua registry record
-// `apache/maven` (0x14bed45d7); see MECHANICS.md.
+// Maven and Ant. The rules come from the original's embedded aqua registry records
+// `apache/maven` (0x14bed45d7) and `apache/ant` (0x14c3ccf3c); see MECHANICS.md.
 // ---------------------------------------------------------------------------
 
 pub const MAVEN_CENTRAL: &str = "https://repo.maven.apache.org/maven2/org/apache/maven/apache-maven";
 pub const APACHE_ARCHIVE: &str = "https://archive.apache.org/dist";
 /// Maven versions up to this one publish only a .sha1 (registry overrides `semver("<= 3.3.1")`).
 pub const MAVEN_LAST_SHA1: &str = "3.3.1";
+/// Ant versions up to this one are refused (registry `semver("<= 1.10.0")`).
+pub const ANT_LAST_REFUSED: &str = "1.10.0";
+pub const ANT_TOO_OLD: &str = "Please use 1.10.1 or later";
 
 /// The registry's version filter for Maven: `not (Version matches "-(rc|alpha|beta)")`.
 pub fn maven_version_allowed(v: &str) -> bool {
@@ -673,6 +680,21 @@ fn maven_versions() -> Res<Vec<String>> {
         .collect())
 }
 
+/// Every Ant version in the Apache archive listing (`apache-ant-<v>-bin.zip`).
+fn ant_versions() -> Res<Vec<String>> {
+    let html = http_get(&format!("{}/ant/binaries/", APACHE_ARCHIVE), None)?;
+    let mut out: Vec<String> = html
+        .split("apache-ant-")
+        .skip(1)
+        .filter_map(|s| s.split("-bin.zip\"").next())
+        .filter(|v| !v.is_empty() && v.len() < 20 && v.chars().all(|c| c.is_ascii_digit() || c == '.'))
+        .map(String::from)
+        .collect();
+    out.sort();
+    out.dedup();
+    Ok(out)
+}
+
 #[derive(Debug)]
 pub struct ApacheDownload {
     pub url: String,
@@ -682,8 +704,9 @@ pub struct ApacheDownload {
     pub checksum_len: usize,
 }
 
-/// Where the registry downloads Maven from:
-/// `https://archive.apache.org/dist/maven/maven-{major}/{v}/binaries/apache-maven-{v}-bin.{fmt}`.
+/// Where the registry downloads Maven and Ant from:
+/// `https://archive.apache.org/dist/maven/maven-{major}/{v}/binaries/apache-maven-{v}-bin.{fmt}`
+/// and `https://archive.apache.org/dist/ant/binaries/apache-ant-{v}-bin.{fmt}`.
 pub fn apache_download(backend: &Backend, version: &str) -> Res<ApacheDownload> {
     let ext = apache_ext();
     match backend {
@@ -695,7 +718,14 @@ pub fn apache_download(backend: &Backend, version: &str) -> Res<ApacheDownload> 
             let (suffix, len) = if old { ("sha1", 40) } else { ("sha512", 128) };
             Ok(ApacheDownload { checksum_url: format!("{}.{}", url, suffix), checksum_len: len, url, file })
         }
-        _ => err(format!("no Apache download for {:?}", backend)),
+        _ => {
+            if version_cmp(version, ANT_LAST_REFUSED) != std::cmp::Ordering::Greater {
+                return err(ANT_TOO_OLD);
+            }
+            let file = format!("apache-ant-{}-bin.{}", version, ext);
+            let url = format!("{}/ant/binaries/{}", APACHE_ARCHIVE, file);
+            Ok(ApacheDownload { checksum_url: format!("{}.sha512", url), checksum_len: 128, url, file })
+        }
     }
 }
 
@@ -739,11 +769,12 @@ pub fn sha512_file(p: &Path) -> Res<String> {
     Ok(h.finalize().iter().map(|b| format!("{:02x}", b)).collect())
 }
 
-/// The `<NAME>_HOME` variable a tool sets: JAVA_HOME, MAVEN_HOME.
+/// The `<NAME>_HOME` variable a tool sets: JAVA_HOME, MAVEN_HOME, ANT_HOME.
 pub fn home_var(tool: &str) -> Option<&'static str> {
     match Backend::of(tool) {
         Backend::Java => Some("JAVA_HOME"),
         Backend::Maven => Some("MAVEN_HOME"),
+        Backend::Ant => Some("ANT_HOME"),
         _ => None,
     }
 }
@@ -970,7 +1001,7 @@ pub fn bin_dirs(tool: &str, path: &Path) -> Vec<PathBuf> {
             out.push(root.join("Scripts"));
         }
         Backend::Python => out.push(root.join("bin")),
-        Backend::Maven => out.push(root.join("bin")),
+        Backend::Maven | Backend::Ant => out.push(root.join("bin")),
         // npm on Windows puts its .cmd launchers in the prefix itself; elsewhere in prefix/bin.
         Backend::Npm(_) if cfg!(windows) => out.push(root.clone()),
         Backend::Npm(_) => out.push(root.join("bin")),
@@ -1306,7 +1337,7 @@ mod package_tests {
     }
 
     #[test]
-    fn maven_rules() {
+    fn maven_and_ant_rules() {
         assert!(maven_version_allowed("3.9.11") && !maven_version_allowed("4.0.0-rc-7") && !maven_version_allowed("4.0.0-alpha-13"));
         let m = apache_download(&Backend::Maven, "3.9.11").unwrap();
         assert!(m.url.starts_with("https://archive.apache.org/dist/maven/maven-3/3.9.11/binaries/apache-maven-3.9.11-bin."));
@@ -1314,6 +1345,8 @@ mod package_tests {
         let old = apache_download(&Backend::Maven, "3.3.1").unwrap();
         assert_eq!((old.checksum_len, old.checksum_url.ends_with(".sha1")), (40, true));
         assert!(apache_download(&Backend::Maven, "4.0.0").unwrap().url.contains("/maven-4/4.0.0/"));
+        assert!(apache_download(&Backend::Ant, "1.10.0").unwrap_err().contains("Please use 1.10.1 or later"));
+        assert!(apache_download(&Backend::Ant, "1.10.15").unwrap().url.ends_with(&format!("apache-ant-1.10.15-bin.{}", apache_ext())));
     }
 
     #[test]

@@ -464,7 +464,7 @@ fn print_version(json: bool) {
     }
 }
 
-/// Windows: puts JAVA_HOME / MAVEN_HOME (and `%VAR%\bin` on PATH) in the user's
+/// Windows: puts JAVA_HOME / MAVEN_HOME / ANT_HOME (and `%VAR%\bin` on PATH) in the user's
 /// environment variables, so cmd.exe, Explorer and IDEs see them. `always` (the global version)
 /// replaces what is there; otherwise it is only filled in when Windows has none, or when the saved
 /// folder no longer exists, so a project's version never overrides your global choice.
@@ -770,7 +770,7 @@ fn dispatch(cli: Cli) -> Res<i32> {
                     }
                 };
                 if tools::is_installed(&t, &v) && !force {
-                    // Already there: still make sure Windows has its JAVA_HOME / MAVEN_HOME.
+                    // Already there: still make sure Windows has its JAVA_HOME / MAVEN_HOME / ANT_HOME.
                     if !dry_run {
                         save_home_var(&t, &v, false, quiet);
                     }
@@ -1047,7 +1047,7 @@ fn dispatch(cli: Cli) -> Res<i32> {
                 if !quiet {
                     info(format!("{} tools: {}@{}", display_path(&target), t, v));
                 }
-                // JAVA_HOME / MAVEN_HOME.
+                // JAVA_HOME / MAVEN_HOME / ANT_HOME.
                 if let Some(var) = tools::home_var(&t) {
                     let home = tools::home_dir(&t, &tools::install_path(&t, &v));
                     if !quiet {
@@ -1579,7 +1579,7 @@ fn doctor() -> Res<i32> {
     println!();
     if cfg!(windows) {
         println!("windows_user_environment:");
-        for (tool, var) in [("java", "JAVA_HOME"), ("maven", "MAVEN_HOME")] {
+        for (tool, var) in [("java", "JAVA_HOME"), ("maven", "MAVEN_HOME"), ("ant", "ANT_HOME")] {
             let v = setup::windows_user_var(var).filter(|s| !s.trim().is_empty());
             println!("  {}: {}", var, v.as_deref().unwrap_or("(not set)"));
             let installed = !tools::installed_versions(tool).is_empty();
