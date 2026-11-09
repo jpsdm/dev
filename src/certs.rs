@@ -305,8 +305,11 @@ mod tests {
 
     #[test]
     fn aliases() {
-        assert_eq!(alias_for(Path::new(r"C:\certs\Corp Root CA.crt"), None), "dev-corp-root-ca");
-        assert_eq!(alias_for(Path::new("/c/bundle.pem"), Some(2)), "dev-bundle-2");
+        // Built with join so the separator is right on every OS (a literal `C:\...` is one
+        // file name on Linux/macOS).
+        let corp = Path::new("certs").join("Corp Root CA.crt");
+        assert_eq!(alias_for(&corp, None), "dev-corp-root-ca");
+        assert_eq!(alias_for(&Path::new("c").join("bundle.pem"), Some(2)), "dev-bundle-2");
     }
 
     #[test]
